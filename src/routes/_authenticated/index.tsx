@@ -1,5 +1,5 @@
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Component, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { z } from "zod";
 import { supabase } from "@/integrations/supabase/client";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -8,9 +8,7 @@ import { Label } from "@/components/ui/label";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetDescription } from "@/components/ui/sheet";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -36,6 +34,8 @@ export const Route = createFileRoute("/_authenticated/")({
 type Status = "Ativo" | "Afastado" | "Bloqueado";
 type Turno = "Manhã" | "Tarde" | "Noite";
 type EpiTipo = "bota" | "colete";
+type MainTab = "lista" | "cadastrar" | "escala" | "demandas" | "epis";
+type DetailTab = "ficha" | "fin" | "adv";
 
 interface Uniforme {
   bota?: { tamanho?: string; entregue?: boolean; autorizado_levar?: boolean };
@@ -72,22 +72,51 @@ function maskTel(v: string) {
   return d.replace(/(\d{2})(\d{5})(\d{0,4})/, "($1) $2-$3").trim();
 }
 function initials(name: string) {
-  return name.trim().split(/\s+/).slice(0, 2).map(p => p[0]?.toUpperCase() ?? "").join("");
+  return (name ?? "").trim().split(/\s+/).slice(0, 2).map(p => p[0]?.toUpperCase() ?? "").join("");
+}
+function safeLower(v: unknown) {
+  return String(v ?? "").toLowerCase();
+}
+function asStatus(v: unknown): Status {
+  return v === "Ativo" || v === "Afastado" || v === "Bloqueado" ? v : "Ativo";
+}
+function asTurno(v: unknown): Turno {
+  return v === "Manhã" || v === "Tarde" || v === "Noite" ? v : "Manhã";
+}
+function normalizeDiarista(row: Partial<Diarista> & Record<string, unknown>): Diarista {
+  return {
+    id: String(row.id ?? ""),
+    nome: String(row.nome ?? ""),
+    cpf: String(row.cpf ?? ""),
+    endereco: String(row.endereco ?? ""),
+    localidade: String(row.localidade ?? ""),
+    lider: String(row.lider ?? ""),
+    turno: asTurno(row.turno),
+    telefone: String(row.telefone ?? ""),
+    email: String(row.email ?? ""),
+    status: asStatus(row.status),
+    foto: typeof row.foto === "string" && row.foto ? row.foto : null,
+    uniforme: row.uniforme && typeof row.uniforme === "object" ? row.uniforme as Uniforme : {},
+  };
 }
 function statusVariant(s: Status): "default" | "secondary" | "destructive" | "outline" {
   if (s === "Ativo") return "default";
   if (s === "Afastado") return "secondary";
   return "destructive";
 }
-function isDomingo(dateStr: string) {
+function isDomingo(dateStr: string | null | undefined) {
+  if (!dateStr || typeof dateStr !== "string" || !dateStr.includes("-")) return false;
   // dateStr YYYY-MM-DD — evitar shift de fuso: parse local
   const [y, m, d] = dateStr.split("-").map(Number);
+  if (!y || !m || !d) return false;
   return new Date(y, m - 1, d).getDay() === 0;
 }
 function fmtBRL(n: number) {
-  return n.toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
+  const value = Number.isFinite(Number(n)) ? Number(n) : 0;
+  return value.toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
 }
 function fmtDate(iso: string) {
+  if (!iso || typeof iso !== "string" || !iso.includes("-")) return "—";
   const [y, m, d] = iso.split("-");
   return `${d}/${m}/${y}`;
 }
@@ -99,6 +128,83 @@ function calcularValor(dateStr: string, ehFeriado: boolean) {
   const diariaAlta = isDomingo(dateStr) || ehFeriado;
   return { valor_diaria: diariaAlta ? 130 : 100, valor_passagem: 20 };
 }
+function useTabRuntimeGuard(title: string) {
+  useEffect(() => {
+    const protect = (error: unknown) => {
+      console.error(`Erro protegido na aba ${title}`, error);
+      toast.error(`A aba ${title} foi protegida contra uma falha.`);
+    };
+    const onError = (event: ErrorEvent) => {
+      protect(event.error ?? event.message);
+      event.preventDefault();
+    };
+    const onRejection = (event: PromiseRejectionEvent) => {
+      protect(event.reason);
+      event.preventDefault();
+    };
+    window.addEventListener("error", onError);
+    window.addEventListener("unhandledrejection", onRejection);
+    return () => {
+      window.removeEventListener("error", onError);
+      window.removeEventListener("unhandledrejection", onRejection);
+    };
+  }, [title]);
+}
+function normalizeDemanda(row: Partial<Demanda> & Record<string, unknown>): Demanda {
+  return {
+    id: String(row.id ?? ""),
+    nome: String(row.nome ?? ""),
+    data_inicio: typeof row.data_inicio === "string" && row.data_inicio ? row.data_inicio : null,
+    data_fim: typeof row.data_fim === "string" && row.data_fim ? row.data_fim : null,
+    observacao: String(row.observacao ?? ""),
+  };
+}
+function normalizeEscala(row: Partial<Escala> & Record<string, unknown>): Escala {
+  return {
+    id: String(row.id ?? ""),
+    diarista_id: String(row.diarista_id ?? ""),
+    demanda_id: typeof row.demanda_id === "string" && row.demanda_id ? row.demanda_id : null,
+    data: typeof row.data === "string" && row.data ? row.data : today(),
+    valor_diaria: Number(row.valor_diaria ?? 0),
+    valor_passagem: Number(row.valor_passagem ?? 0),
+    eh_feriado: Boolean(row.eh_feriado),
+    observacao: String(row.observacao ?? ""),
+  };
+}
+
+class TabErrorBoundary extends Component<{ tabKey: string; title: string; children: ReactNode }, { hasError: boolean }> {
+  state = { hasError: false };
+
+  static getDerivedStateFromError() {
+    return { hasError: true };
+  }
+
+  componentDidCatch(error: Error) {
+    console.error(`Erro protegido na aba ${this.props.title}`, error);
+    toast.error(`A aba ${this.props.title} foi protegida contra uma falha.`);
+  }
+
+  componentDidUpdate(prevProps: { tabKey: string }) {
+    if (prevProps.tabKey !== this.props.tabKey && this.state.hasError) {
+      this.setState({ hasError: false });
+    }
+  }
+
+  render() {
+    if (!this.state.hasError) return this.props.children;
+    return (
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2"><AlertTriangle className="h-5 w-5 text-destructive" />Aba protegida</CardTitle>
+          <CardDescription>O sistema impediu que uma falha na aba {this.props.title} derrubasse o site.</CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-3">
+          <Button onClick={() => this.setState({ hasError: false })}>Tentar novamente</Button>
+        </CardContent>
+      </Card>
+    );
+  }
+}
 
 function HomePage() {
   const search = Route.useSearch();
@@ -106,7 +212,7 @@ function HomePage() {
   const [items, setItems] = useState<Diarista[]>([]);
   const [loading, setLoading] = useState(true);
   const [query, setQuery] = useState("");
-  const [tab, setTab] = useState("lista");
+  const [tab, setTab] = useState<MainTab>("lista");
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [form, setForm] = useState(empty);
   const fileRef = useRef<HTMLInputElement>(null);
@@ -114,18 +220,24 @@ function HomePage() {
   useEffect(() => { load(); }, []);
 
   async function load() {
-    setLoading(true);
-    const { data, error } = await supabase.from("diaristas").select("*").order("nome");
-    setLoading(false);
-    if (error) return toast.error(error.message);
-    setItems((data ?? []) as unknown as Diarista[]);
+    try {
+      setLoading(true);
+      const { data, error } = await supabase.from("diaristas").select("*").order("nome");
+      if (error) return toast.error(error.message);
+      setItems(((data ?? []) as Array<Partial<Diarista> & Record<string, unknown>>).map(normalizeDiarista));
+    } catch (error) {
+      toast.error("Falha ao carregar diaristas");
+      console.error(error);
+    } finally {
+      setLoading(false);
+    }
   }
 
   const filtered = useMemo(() => {
-    let list = items;
+    let list = items || [];
     if (search.status) list = list.filter(i => i.status === search.status);
     const q = query.trim().toLowerCase();
-    if (q) list = list.filter(i => i.nome.toLowerCase().includes(q) || i.cpf.includes(q));
+    if (q) list = list.filter(i => safeLower(i.nome).includes(q) || String(i.cpf ?? "").includes(q));
     return list;
   }, [items, query, search.status]);
 
@@ -144,45 +256,60 @@ function HomePage() {
   }
 
   async function handleFoto(e: React.ChangeEvent<HTMLInputElement>) {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    if (file.size > 10 * 1024 * 1024) return toast.error("Foto deve ter no máximo 10MB");
-    // Comprimir para no máx 1600px de largura
-    const dataUrl = await new Promise<string>((resolve, reject) => {
-      const reader = new FileReader();
-      reader.onload = () => resolve(reader.result as string);
-      reader.onerror = reject;
-      reader.readAsDataURL(file);
-    });
-    const img = new Image();
-    img.onload = () => {
-      const maxW = 1600;
-      const scale = Math.min(1, maxW / img.width);
-      const w = Math.round(img.width * scale);
-      const h = Math.round(img.height * scale);
-      const canvas = document.createElement("canvas");
-      canvas.width = w; canvas.height = h;
-      const ctx = canvas.getContext("2d");
-      if (!ctx) { setForm(f => ({ ...f, foto: dataUrl })); return; }
-      ctx.drawImage(img, 0, 0, w, h);
-      setForm(f => ({ ...f, foto: canvas.toDataURL("image/jpeg", 0.85) }));
-    };
-    img.onerror = () => setForm(f => ({ ...f, foto: dataUrl }));
-    img.src = dataUrl;
+    try {
+      const file = e.target.files?.[0];
+      if (!file) return;
+      if (file.size > 10 * 1024 * 1024) return toast.error("Foto deve ter no máximo 10MB");
+      // Comprimir para no máx 1600px de largura
+      const dataUrl = await new Promise<string>((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(reader.result as string);
+        reader.onerror = reject;
+        reader.readAsDataURL(file);
+      });
+      const img = new Image();
+      img.onload = () => {
+        try {
+          const maxW = 1600;
+          const scale = Math.min(1, maxW / Math.max(img.width, 1));
+          const w = Math.max(1, Math.round(img.width * scale));
+          const h = Math.max(1, Math.round(img.height * scale));
+          const canvas = document.createElement("canvas");
+          canvas.width = w; canvas.height = h;
+          const ctx = canvas.getContext("2d");
+          if (!ctx) { setForm(f => ({ ...f, foto: dataUrl })); return; }
+          ctx.drawImage(img, 0, 0, w, h);
+          setForm(f => ({ ...f, foto: canvas.toDataURL("image/jpeg", 0.85) }));
+        } catch (error) {
+          console.error(error);
+          setForm(f => ({ ...f, foto: dataUrl }));
+        }
+      };
+      img.onerror = () => setForm(f => ({ ...f, foto: dataUrl }));
+      img.src = dataUrl;
+    } catch (error) {
+      console.error(error);
+      toast.error("Não foi possível carregar a foto");
+    }
   }
 
   async function add(e: React.FormEvent) {
-    e.preventDefault();
-    if (!form.nome.trim()) return toast.error("Nome é obrigatório");
-    const { error } = await supabase.from("diaristas").insert({
-      ...form, foto: form.foto || null, uniforme: form.uniforme as never,
-    });
-    if (error) return toast.error(error.message);
-    toast.success("Diarista cadastrada");
-    setForm(empty);
-    if (fileRef.current) fileRef.current.value = "";
-    setTab("lista");
-    load();
+    try {
+      e.preventDefault();
+      if (!form.nome.trim()) return toast.error("Nome é obrigatório");
+      const { error } = await supabase.from("diaristas").insert({
+        ...form, foto: form.foto || null, uniforme: form.uniforme as never,
+      });
+      if (error) return toast.error("Não foi possível cadastrar", { description: error.message });
+      toast.success("Diarista cadastrada");
+      setForm(empty);
+      if (fileRef.current) fileRef.current.value = "";
+      setTab("lista");
+      load();
+    } catch (error) {
+      console.error(error);
+      toast.error("Não foi possível cadastrar. Tente novamente.");
+    }
   }
 
   async function remove(id: string) {
@@ -222,16 +349,17 @@ function HomePage() {
           <StatCard label="Bloqueados" value={stats.bloqueados} active={search.status === "Bloqueado"} onClick={() => goStatus("Bloqueado")} />
         </div>
 
-        <Tabs value={tab} onValueChange={setTab}>
-          <TabsList className="flex-wrap h-auto">
-            <TabsTrigger value="lista"><Users className="h-4 w-4 mr-1" />Diaristas</TabsTrigger>
-            <TabsTrigger value="cadastrar"><UserPlus className="h-4 w-4 mr-1" />Cadastrar</TabsTrigger>
-            <TabsTrigger value="escala"><CalendarDays className="h-4 w-4 mr-1" />Escala</TabsTrigger>
-            <TabsTrigger value="demandas"><ClipboardList className="h-4 w-4 mr-1" />Demandas</TabsTrigger>
-            <TabsTrigger value="epis"><Shirt className="h-4 w-4 mr-1" />EPIs</TabsTrigger>
-          </TabsList>
+        <div className="space-y-4">
+          <div className="inline-flex h-auto flex-wrap items-center justify-center rounded-lg bg-muted p-1 text-muted-foreground" role="tablist" aria-label="Navegação principal">
+            <MainTabButton active={tab === "lista"} onClick={() => setTab("lista")}><Users className="h-4 w-4 mr-1" />Diaristas</MainTabButton>
+            <MainTabButton active={tab === "cadastrar"} onClick={() => setTab("cadastrar")}><UserPlus className="h-4 w-4 mr-1" />Cadastrar</MainTabButton>
+            <MainTabButton active={tab === "escala"} onClick={() => setTab("escala")}><CalendarDays className="h-4 w-4 mr-1" />Escala</MainTabButton>
+            <MainTabButton active={tab === "demandas"} onClick={() => setTab("demandas")}><ClipboardList className="h-4 w-4 mr-1" />Demandas</MainTabButton>
+            <MainTabButton active={tab === "epis"} onClick={() => setTab("epis")}><Shirt className="h-4 w-4 mr-1" />EPIs</MainTabButton>
+          </div>
 
-          <TabsContent value="lista" className="mt-4">
+          {tab === "lista" && (
+            <TabErrorBoundary tabKey={`${tab}-lista`} title="Diaristas">
             <Card>
               <CardHeader className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                 <div>
@@ -280,9 +408,11 @@ function HomePage() {
                 </div>
               </CardContent>
             </Card>
-          </TabsContent>
+            </TabErrorBoundary>
+          )}
 
-          <TabsContent value="cadastrar" className="mt-4">
+          {tab === "cadastrar" && (
+            <TabErrorBoundary tabKey={`${tab}-cadastrar`} title="Cadastrar">
             <Card>
               <CardHeader>
                 <CardTitle>Nova Diarista</CardTitle>
@@ -306,26 +436,20 @@ function HomePage() {
                   <Field label="SC / Localidade" id="loc"><Input id="loc" value={form.localidade} onChange={e => setForm({ ...form, localidade: e.target.value })} /></Field>
                   <Field label="Líder" id="lider"><Input id="lider" value={form.lider} onChange={e => setForm({ ...form, lider: e.target.value })} /></Field>
                   <Field label="Turno" id="turno">
-                    <Select value={form.turno} onValueChange={v => setForm({ ...form, turno: v as Turno })}>
-                      <SelectTrigger id="turno"><SelectValue /></SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="Manhã">Manhã</SelectItem>
-                        <SelectItem value="Tarde">Tarde</SelectItem>
-                        <SelectItem value="Noite">Noite</SelectItem>
-                      </SelectContent>
-                    </Select>
+                    <select id="turno" value={form.turno} onChange={e => setForm({ ...form, turno: e.target.value as Turno })} className="flex h-9 w-full rounded-md border border-input bg-background px-3 py-1 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring">
+                      <option value="Manhã">Manhã</option>
+                      <option value="Tarde">Tarde</option>
+                      <option value="Noite">Noite</option>
+                    </select>
                   </Field>
                   <Field label="Telefone" id="tel"><Input id="tel" value={form.telefone} onChange={e => setForm({ ...form, telefone: maskTel(e.target.value) })} placeholder="(00) 00000-0000" /></Field>
                   <Field label="Email" id="email"><Input id="email" type="email" value={form.email} onChange={e => setForm({ ...form, email: e.target.value })} /></Field>
                   <Field label="Status" id="status">
-                    <Select value={form.status} onValueChange={v => setForm({ ...form, status: v as Status })}>
-                      <SelectTrigger id="status"><SelectValue /></SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="Ativo">Ativo</SelectItem>
-                        <SelectItem value="Afastado">Afastado</SelectItem>
-                        <SelectItem value="Bloqueado">Bloqueado</SelectItem>
-                      </SelectContent>
-                    </Select>
+                    <select id="status" value={form.status} onChange={e => setForm({ ...form, status: e.target.value as Status })} className="flex h-9 w-full rounded-md border border-input bg-background px-3 py-1 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring">
+                      <option value="Ativo">Ativo</option>
+                      <option value="Afastado">Afastado</option>
+                      <option value="Bloqueado">Bloqueado</option>
+                    </select>
                   </Field>
                   <div className="sm:col-span-2 flex justify-end gap-2">
                     <Button type="button" variant="outline" onClick={() => setForm(empty)}>Limpar</Button>
@@ -334,20 +458,21 @@ function HomePage() {
                 </form>
               </CardContent>
             </Card>
-          </TabsContent>
+            </TabErrorBoundary>
+          )}
 
-          <TabsContent value="escala" className="mt-4">
-            <EscalaTab diaristas={items} />
-          </TabsContent>
+          {tab === "escala" && (
+            <TabErrorBoundary tabKey={`${tab}-escala`} title="Escala"><EscalaTab diaristas={items} /></TabErrorBoundary>
+          )}
 
-          <TabsContent value="demandas" className="mt-4">
-            <DemandasTab diaristas={items} />
-          </TabsContent>
+          {tab === "demandas" && (
+            <TabErrorBoundary tabKey={`${tab}-demandas`} title="Demandas"><DemandasTab diaristas={items} /></TabErrorBoundary>
+          )}
 
-          <TabsContent value="epis" className="mt-4">
-            <EpiTab diaristas={items} />
-          </TabsContent>
-        </Tabs>
+          {tab === "epis" && (
+            <TabErrorBoundary tabKey={`${tab}-epis`} title="EPIs"><EpiTab diaristas={items} /></TabErrorBoundary>
+          )}
+        </div>
       </main>
 
       <Sheet open={!!selected} onOpenChange={(o) => !o && setSelectedId(null)}>
@@ -368,6 +493,20 @@ function StatCard({ label, value, active, onClick }: { label: string; value: num
   );
 }
 
+function MainTabButton({ active, onClick, children }: { active: boolean; onClick: () => void; children: ReactNode }) {
+  return (
+    <button
+      type="button"
+      role="tab"
+      aria-selected={active}
+      onClick={onClick}
+      className={`inline-flex items-center justify-center whitespace-nowrap rounded-md px-3 py-1 text-sm font-medium ring-offset-background cursor-pointer transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 ${active ? "bg-background text-foreground shadow" : "hover:bg-background/60"}`}
+    >
+      {children}
+    </button>
+  );
+}
+
 function Field({ label, id, className = "", children }: { label: string; id: string; className?: string; children: React.ReactNode }) {
   return (
     <div className={`space-y-1.5 ${className}`}>
@@ -382,6 +521,7 @@ function DetailPanel({ d, onSave, onRemove }: { d: Diarista; onSave: (p: Partial
   const [local, setLocal] = useState<Diarista>(d);
   const [saving, setSaving] = useState(false);
   const [photoOpen, setPhotoOpen] = useState(false);
+  const [detailTab, setDetailTab] = useState<DetailTab>("ficha");
   const [escalas, setEscalas] = useState<Escala[]>([]);
   const [advertencias, setAdvertencias] = useState<Advertencia[]>([]);
   const [novaAdv, setNovaAdv] = useState({ data: today(), motivo: "" });
@@ -389,12 +529,17 @@ function DetailPanel({ d, onSave, onRemove }: { d: Diarista; onSave: (p: Partial
   useEffect(() => { setLocal(d); }, [d.id]);
 
   const loadFin = useCallback(async () => {
-    const [e, a] = await Promise.all([
-      supabase.from("escalas").select("*").eq("diarista_id", d.id).order("data", { ascending: false }),
-      supabase.from("advertencias").select("*").eq("diarista_id", d.id).order("data", { ascending: false }),
-    ]);
-    if (!e.error) setEscalas((e.data ?? []) as unknown as Escala[]);
-    if (!a.error) setAdvertencias((a.data ?? []) as unknown as Advertencia[]);
+    try {
+      const [e, a] = await Promise.all([
+        supabase.from("escalas").select("*").eq("diarista_id", d.id).order("data", { ascending: false }),
+        supabase.from("advertencias").select("*").eq("diarista_id", d.id).order("data", { ascending: false }),
+      ]);
+      if (!e.error) setEscalas(((e.data ?? []) as Array<Partial<Escala> & Record<string, unknown>>).map(normalizeEscala));
+      if (!a.error) setAdvertencias((a.data ?? []) as unknown as Advertencia[]);
+    } catch (error) {
+      console.error(error);
+      toast.error("Falha ao carregar ficha financeira");
+    }
   }, [d.id]);
 
   useEffect(() => { loadFin(); }, [loadFin]);
@@ -468,40 +613,34 @@ function DetailPanel({ d, onSave, onRemove }: { d: Diarista; onSave: (p: Partial
         </DialogContent>
       </Dialog>
 
-      <Tabs defaultValue="ficha" className="py-4">
-        <TabsList className="w-full">
-          <TabsTrigger value="ficha" className="flex-1">Ficha</TabsTrigger>
-          <TabsTrigger value="fin" className="flex-1">Financeiro</TabsTrigger>
-          <TabsTrigger value="adv" className="flex-1">Advertências</TabsTrigger>
-        </TabsList>
+      <div className="py-4">
+        <div className="grid w-full grid-cols-3 rounded-lg bg-muted p-1 text-muted-foreground" role="tablist" aria-label="Abas da ficha">
+          <button type="button" role="tab" aria-selected={detailTab === "ficha"} onClick={() => setDetailTab("ficha")} className={`rounded-md px-3 py-1 text-sm font-medium ${detailTab === "ficha" ? "bg-background text-foreground shadow" : "hover:bg-background/60"}`}>Ficha</button>
+          <button type="button" role="tab" aria-selected={detailTab === "fin"} onClick={() => setDetailTab("fin")} className={`rounded-md px-3 py-1 text-sm font-medium ${detailTab === "fin" ? "bg-background text-foreground shadow" : "hover:bg-background/60"}`}>Financeiro</button>
+          <button type="button" role="tab" aria-selected={detailTab === "adv"} onClick={() => setDetailTab("adv")} className={`rounded-md px-3 py-1 text-sm font-medium ${detailTab === "adv" ? "bg-background text-foreground shadow" : "hover:bg-background/60"}`}>Advertências</button>
+        </div>
 
-        <TabsContent value="ficha" className="space-y-4 mt-4">
+        {detailTab === "ficha" && <div className="space-y-4 mt-4">
           <Field label="Nome" id="d-nome"><Input id="d-nome" value={local.nome} onChange={e => set("nome", e.target.value)} /></Field>
           <Field label="Endereço" id="d-end"><Textarea id="d-end" value={local.endereco} onChange={e => set("endereco", e.target.value)} rows={2} /></Field>
           <Field label="CPF" id="d-cpf"><Input id="d-cpf" value={local.cpf} onChange={e => set("cpf", maskCPF(e.target.value))} /></Field>
           <Field label="SC / Localidade" id="d-loc"><Input id="d-loc" value={local.localidade} onChange={e => set("localidade", e.target.value)} /></Field>
           <Field label="Líder" id="d-lider"><Input id="d-lider" value={local.lider} onChange={e => set("lider", e.target.value)} /></Field>
           <Field label="Turno" id="d-turno">
-            <Select value={local.turno} onValueChange={v => set("turno", v as Turno)}>
-              <SelectTrigger id="d-turno"><SelectValue /></SelectTrigger>
-              <SelectContent>
-                <SelectItem value="Manhã">Manhã</SelectItem>
-                <SelectItem value="Tarde">Tarde</SelectItem>
-                <SelectItem value="Noite">Noite</SelectItem>
-              </SelectContent>
-            </Select>
+            <select id="d-turno" value={local.turno} onChange={e => set("turno", e.target.value as Turno)} className="flex h-9 w-full rounded-md border border-input bg-background px-3 py-1 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring">
+              <option value="Manhã">Manhã</option>
+              <option value="Tarde">Tarde</option>
+              <option value="Noite">Noite</option>
+            </select>
           </Field>
           <Field label="Telefone" id="d-tel"><Input id="d-tel" value={local.telefone} onChange={e => set("telefone", maskTel(e.target.value))} /></Field>
           <Field label="Email" id="d-email"><Input id="d-email" type="email" value={local.email} onChange={e => set("email", e.target.value)} /></Field>
           <Field label="Status" id="d-status">
-            <Select value={local.status} onValueChange={v => set("status", v as Status)}>
-              <SelectTrigger id="d-status"><SelectValue /></SelectTrigger>
-              <SelectContent>
-                <SelectItem value="Ativo">Ativo</SelectItem>
-                <SelectItem value="Afastado">Afastado</SelectItem>
-                <SelectItem value="Bloqueado">Bloqueado</SelectItem>
-              </SelectContent>
-            </Select>
+            <select id="d-status" value={local.status} onChange={e => set("status", e.target.value as Status)} className="flex h-9 w-full rounded-md border border-input bg-background px-3 py-1 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring">
+              <option value="Ativo">Ativo</option>
+              <option value="Afastado">Afastado</option>
+              <option value="Bloqueado">Bloqueado</option>
+            </select>
           </Field>
 
           <div className="rounded-lg border p-3 space-y-3">
@@ -537,9 +676,9 @@ function DetailPanel({ d, onSave, onRemove }: { d: Diarista; onSave: (p: Partial
             <Button variant="destructive" onClick={onRemove}><Trash2 className="h-4 w-4 mr-1" />Remover</Button>
             <Button onClick={save} disabled={saving}><Save className="h-4 w-4 mr-1" />{saving ? "Salvando..." : "Salvar"}</Button>
           </div>
-        </TabsContent>
+        </div>}
 
-        <TabsContent value="fin" className="mt-4 space-y-3">
+        {detailTab === "fin" && <div className="mt-4 space-y-3">
           <div className="rounded-lg border p-4 bg-primary/5">
             <div className="text-xs text-muted-foreground uppercase">Total a receber</div>
             <div className="text-2xl font-bold">{fmtBRL(totalReceber)}</div>
@@ -573,9 +712,9 @@ function DetailPanel({ d, onSave, onRemove }: { d: Diarista; onSave: (p: Partial
               </TableBody>
             </Table>
           </div>
-        </TabsContent>
+        </div>}
 
-        <TabsContent value="adv" className="mt-4 space-y-3">
+        {detailTab === "adv" && <div className="mt-4 space-y-3">
           <div className="rounded-lg border p-3 space-y-2">
             <div className="font-medium text-sm">Registrar advertência</div>
             <div className="flex gap-2">
@@ -596,14 +735,16 @@ function DetailPanel({ d, onSave, onRemove }: { d: Diarista; onSave: (p: Partial
               </div>
             ))}
           </div>
-        </TabsContent>
-      </Tabs>
+        </div>}
+      </div>
     </>
   );
 }
 
 /* =========================== ESCALA TAB =========================== */
 function EscalaTab({ diaristas }: { diaristas: Diarista[] }) {
+  useTabRuntimeGuard("Escala");
+  const diaristasSafe = Array.isArray(diaristas) ? diaristas : [];
   const [data, setData] = useState(today());
   const [ehFeriado, setEhFeriado] = useState(false);
   const [escalas, setEscalas] = useState<Escala[]>([]);
@@ -614,26 +755,35 @@ function EscalaTab({ diaristas }: { diaristas: Diarista[] }) {
   const [loading, setLoading] = useState(false);
 
   const load = useCallback(async () => {
-    setLoading(true);
-    const [e, d] = await Promise.all([
-      supabase.from("escalas").select("*").eq("data", data).order("created_at"),
-      supabase.from("demandas").select("*").order("nome"),
-    ]);
-    setLoading(false);
-    if (e.error) toast.error(e.error.message);
-    else setEscalas((e.data ?? []) as unknown as Escala[]);
-    if (!d.error) setDemandas((d.data ?? []) as unknown as Demanda[]);
+    try {
+      setLoading(true);
+      const [e, d] = await Promise.all([
+        supabase.from("escalas").select("*").eq("data", data).order("created_at"),
+        supabase.from("demandas").select("*").order("nome"),
+      ]);
+      if (e.error) toast.error("Falha ao carregar escala", { description: e.error.message });
+      else setEscalas(((e.data ?? []) as Array<Partial<Escala> & Record<string, unknown>>).map(normalizeEscala));
+      if (d.error) toast.error("Falha ao carregar demandas", { description: d.error.message });
+      else setDemandas(((d.data ?? []) as Array<Partial<Demanda> & Record<string, unknown>>).map(normalizeDemanda));
+    } catch (error) {
+      console.error(error);
+      toast.error("Falha ao carregar escala");
+    } finally {
+      setLoading(false);
+    }
   }, [data]);
 
   useEffect(() => { load(); setSelecionados(new Set()); }, [load]);
 
-  const escaladosMap = useMemo(() => new Map(escalas.map(e => [e.diarista_id, e])), [escalas]);
+  const escalasSafe = Array.isArray(escalas) ? escalas : [];
+  const demandasSafe = Array.isArray(demandas) ? demandas : [];
+  const escaladosMap = useMemo(() => new Map(escalasSafe.map(e => [e.diarista_id, e])), [escalasSafe]);
   const disponiveis = useMemo(() => {
     const q = buscaDiarista.trim().toLowerCase();
-    return diaristas
+    return diaristasSafe
       .filter(d => !escaladosMap.has(d.id))
-      .filter(d => !q || d.nome.toLowerCase().includes(q));
-  }, [diaristas, escaladosMap, buscaDiarista]);
+      .filter(d => !q || safeLower(d.nome).includes(q));
+  }, [diaristasSafe, escaladosMap, buscaDiarista]);
 
   function toggle(id: string) {
     setSelecionados(prev => {
@@ -652,37 +802,48 @@ function EscalaTab({ diaristas }: { diaristas: Diarista[] }) {
   }
 
   async function escalarSelecionados() {
-    if (selecionados.size === 0) return toast.error("Selecione ao menos uma diarista");
-    const escolhidos = diaristas.filter(d => selecionados.has(d.id));
-    const bloqueados = escolhidos.filter(d => d.status === "Bloqueado");
-    const validos = escolhidos.filter(d => d.status !== "Bloqueado");
-    bloqueados.forEach(b => toast.error(`${b.nome} está bloqueado e não pode ser escalado`));
-    if (validos.length === 0) return;
-    if (escalas.length + validos.length > 500) {
-      return toast.error("Limite de 500 pessoas por dia atingido");
+    try {
+      if (selecionados.size === 0) return toast.error("Selecione ao menos uma diarista");
+      const escolhidos = diaristasSafe.filter(d => selecionados.has(d.id));
+      const bloqueados = escolhidos.filter(d => d.status === "Bloqueado");
+      const validos = escolhidos.filter(d => d.status !== "Bloqueado");
+      bloqueados.forEach(b => toast.error(`${b.nome} bloqueado`));
+      if (validos.length === 0) return;
+      if (escalasSafe.length + validos.length > 500) {
+        return toast.error("Limite de 500 pessoas por dia atingido");
+      }
+      const { valor_diaria, valor_passagem } = calcularValor(data, ehFeriado);
+      const rows = validos.map(v => ({
+        diarista_id: v.id,
+        demanda_id: demandaId === "nenhuma" ? null : demandaId,
+        data, valor_diaria, valor_passagem, eh_feriado: ehFeriado,
+        observacao: "",
+      }));
+      const { error } = await supabase.from("escalas").insert(rows);
+      if (error) return toast.error("Não foi possível escalar", { description: error.message });
+      toast.success(`${validos.length} escalado(s)`);
+      setSelecionados(new Set());
+      load();
+    } catch (error) {
+      console.error(error);
+      toast.error("Não foi possível escalar. Tente novamente.");
     }
-    const { valor_diaria, valor_passagem } = calcularValor(data, ehFeriado);
-    const rows = validos.map(v => ({
-      diarista_id: v.id,
-      demanda_id: demandaId === "nenhuma" ? null : demandaId,
-      data, valor_diaria, valor_passagem, eh_feriado: ehFeriado,
-    }));
-    const { error } = await supabase.from("escalas").insert(rows);
-    if (error) return toast.error(error.message);
-    toast.success(`${validos.length} escalado(s)`);
-    setSelecionados(new Set());
-    load();
   }
 
   async function desescalar(id: string) {
-    const { error } = await supabase.from("escalas").delete().eq("id", id);
-    if (error) return toast.error(error.message);
-    load();
+    try {
+      const { error } = await supabase.from("escalas").delete().eq("id", id);
+      if (error) return toast.error(error.message);
+      load();
+    } catch (error) {
+      console.error(error);
+      toast.error("Não foi possível remover da escala");
+    }
   }
 
-  const totalDia = escalas.reduce((s, e) => s + Number(e.valor_diaria) + Number(e.valor_passagem), 0);
+  const totalDia = escalasSafe.reduce((s, e) => s + Number(e.valor_diaria) + Number(e.valor_passagem), 0);
   const domingo = isDomingo(data);
-  const bloqueadosCount = diaristas.filter(d => d.status === "Bloqueado" && !escaladosMap.has(d.id)).length;
+  const bloqueadosCount = diaristasSafe.filter(d => d.status === "Bloqueado" && !escaladosMap.has(d.id)).length;
 
   return (
     <Card>
@@ -717,19 +878,16 @@ function EscalaTab({ diaristas }: { diaristas: Diarista[] }) {
               <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
               <Input placeholder="Buscar diarista..." value={buscaDiarista} onChange={e => setBuscaDiarista(e.target.value)} className="pl-9" />
             </div>
-            <Select value={demandaId} onValueChange={setDemandaId}>
-              <SelectTrigger><SelectValue placeholder="Demanda (opcional)" /></SelectTrigger>
-              <SelectContent>
-                <SelectItem value="nenhuma">Sem demanda</SelectItem>
-                {demandas.map(d => <SelectItem key={d.id} value={d.id}>{d.nome}</SelectItem>)}
-              </SelectContent>
-            </Select>
+            <select value={demandaId} onChange={e => setDemandaId(e.target.value)} className="flex h-9 w-full rounded-md border border-input bg-background px-3 py-1 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring">
+              <option value="nenhuma">Sem demanda</option>
+              {demandasSafe.map(d => <option key={d.id} value={d.id}>{d.nome}</option>)}
+            </select>
           </div>
 
           <div className="max-h-72 overflow-y-auto rounded-md border">
             {disponiveis.length === 0 ? (
               <div className="p-4 text-center text-sm text-muted-foreground">
-                {diaristas.length === 0 ? "Nenhuma diarista cadastrada" : "Todas já foram escaladas nesse dia"}
+                {diaristasSafe.length === 0 ? "Nenhuma diarista cadastrada" : "Todas já foram escaladas nesse dia"}
               </div>
             ) : (
               <>
@@ -749,14 +907,14 @@ function EscalaTab({ diaristas }: { diaristas: Diarista[] }) {
                       onClick={(e) => {
                         if (bloq) {
                           e.preventDefault();
-                          toast.error(`${d.nome} está bloqueado e não pode ser escalado`);
+                          toast.error(`${d.nome} bloqueado`);
                         }
                       }}
                     >
                       <Checkbox
                         checked={selecionados.has(d.id)}
                         onCheckedChange={() => {
-                          if (bloq) { toast.error(`${d.nome} está bloqueado e não pode ser escalado`); return; }
+                          if (bloq) { toast.error(`${d.nome} bloqueado`); return; }
                           toggle(d.id);
                         }}
                         disabled={bloq}
@@ -790,10 +948,10 @@ function EscalaTab({ diaristas }: { diaristas: Diarista[] }) {
             </TableHeader>
             <TableBody>
               {loading && <TableRow><TableCell colSpan={5} className="text-center py-6 text-muted-foreground">Carregando...</TableCell></TableRow>}
-              {!loading && escalas.length === 0 && <TableRow><TableCell colSpan={5} className="text-center py-6 text-muted-foreground">Ninguém escalado nesse dia</TableCell></TableRow>}
-              {escalas.map((e, i) => {
-                const p = diaristas.find(x => x.id === e.diarista_id);
-                const dem = demandas.find(x => x.id === e.demanda_id);
+              {!loading && escalasSafe.length === 0 && <TableRow><TableCell colSpan={5} className="text-center py-6 text-muted-foreground">Ninguém escalado nesse dia</TableCell></TableRow>}
+              {escalasSafe.map((e, i) => {
+                const p = diaristasSafe.find(x => x.id === e.diarista_id);
+                const dem = demandasSafe.find(x => x.id === e.demanda_id);
                 return (
                   <TableRow key={e.id}>
                     <TableCell className="text-muted-foreground">{i + 1}</TableCell>
@@ -809,7 +967,7 @@ function EscalaTab({ diaristas }: { diaristas: Diarista[] }) {
             </TableBody>
           </Table>
         </div>
-        <div className="text-xs text-muted-foreground text-right">{escalas.length} pessoa(s) nesse dia</div>
+        <div className="text-xs text-muted-foreground text-right">{escalasSafe.length} pessoa(s) nesse dia</div>
       </CardContent>
     </Card>
   );
@@ -817,44 +975,65 @@ function EscalaTab({ diaristas }: { diaristas: Diarista[] }) {
 
 /* =========================== DEMANDAS TAB =========================== */
 function DemandasTab({ diaristas }: { diaristas: Diarista[] }) {
+  useTabRuntimeGuard("Demandas");
+  const diaristasSafe = Array.isArray(diaristas) ? diaristas : [];
   const [demandas, setDemandas] = useState<Demanda[]>([]);
   const [escalas, setEscalas] = useState<Escala[]>([]);
   const [nova, setNova] = useState({ nome: "", data_inicio: "", data_fim: "", observacao: "" });
   const [selId, setSelId] = useState<string | null>(null);
 
   const load = useCallback(async () => {
-    const [d, e] = await Promise.all([
-      supabase.from("demandas").select("*").order("created_at", { ascending: false }),
-      supabase.from("escalas").select("*").not("demanda_id", "is", null),
-    ]);
-    if (!d.error) setDemandas((d.data ?? []) as unknown as Demanda[]);
-    if (!e.error) setEscalas((e.data ?? []) as unknown as Escala[]);
+    try {
+      const [d, e] = await Promise.all([
+        supabase.from("demandas").select("*").order("created_at", { ascending: false }),
+        supabase.from("escalas").select("*").not("demanda_id", "is", null),
+      ]);
+      if (d.error) toast.error("Falha ao carregar demandas", { description: d.error.message });
+      else setDemandas(((d.data ?? []) as Array<Partial<Demanda> & Record<string, unknown>>).map(normalizeDemanda));
+      if (e.error) toast.error("Falha ao carregar escalas", { description: e.error.message });
+      else setEscalas(((e.data ?? []) as Array<Partial<Escala> & Record<string, unknown>>).map(normalizeEscala));
+    } catch (error) {
+      console.error(error);
+      toast.error("Falha ao carregar demandas");
+    }
   }, []);
   useEffect(() => { load(); }, [load]);
 
   async function criar() {
-    if (!nova.nome.trim()) return toast.error("Nome da demanda é obrigatório");
-    const { error } = await supabase.from("demandas").insert({
-      nome: nova.nome.trim(),
-      data_inicio: nova.data_inicio || null,
-      data_fim: nova.data_fim || null,
-      observacao: nova.observacao,
-    });
-    if (error) return toast.error(error.message);
-    setNova({ nome: "", data_inicio: "", data_fim: "", observacao: "" });
-    load();
-    toast.success("Demanda criada");
+    try {
+      if (!nova.nome.trim()) return toast.error("Nome da demanda é obrigatório");
+      const { error } = await supabase.from("demandas").insert({
+        nome: nova.nome.trim(),
+        data_inicio: nova.data_inicio || null,
+        data_fim: nova.data_fim || null,
+        observacao: nova.observacao,
+      });
+      if (error) return toast.error("Não foi possível criar demanda", { description: error.message });
+      setNova({ nome: "", data_inicio: "", data_fim: "", observacao: "" });
+      load();
+      toast.success("Demanda criada");
+    } catch (error) {
+      console.error(error);
+      toast.error("Não foi possível criar demanda. Tente novamente.");
+    }
   }
   async function remover(id: string) {
-    if (!confirm("Excluir demanda? Os dias escalados perderão o vínculo.")) return;
-    const { error } = await supabase.from("demandas").delete().eq("id", id);
-    if (error) return toast.error(error.message);
-    if (selId === id) setSelId(null);
-    load();
+    try {
+      if (!confirm("Excluir demanda? Os dias escalados perderão o vínculo.")) return;
+      const { error } = await supabase.from("demandas").delete().eq("id", id);
+      if (error) return toast.error(error.message);
+      if (selId === id) setSelId(null);
+      load();
+    } catch (error) {
+      console.error(error);
+      toast.error("Não foi possível excluir demanda");
+    }
   }
 
-  const selecionada = demandas.find(d => d.id === selId);
-  const escalasDaDemanda = selecionada ? escalas.filter(e => e.demanda_id === selecionada.id) : [];
+  const demandasSafe = Array.isArray(demandas) ? demandas : [];
+  const escalasSafe = Array.isArray(escalas) ? escalas : [];
+  const selecionada = demandasSafe.find(d => d.id === selId);
+  const escalasDaDemanda = selecionada ? escalasSafe.filter(e => e.demanda_id === selecionada.id) : [];
   const totalDemanda = escalasDaDemanda.reduce((s, e) => s + Number(e.valor_diaria) + Number(e.valor_passagem), 0);
 
   return (
@@ -881,9 +1060,9 @@ function DemandasTab({ diaristas }: { diaristas: Diarista[] }) {
           <CardDescription>Clique para ver detalhes</CardDescription>
         </CardHeader>
         <CardContent className="space-y-2">
-          {demandas.length === 0 && <div className="text-center text-muted-foreground py-6">Nenhuma demanda</div>}
-          {demandas.map(d => {
-            const count = escalas.filter(e => e.demanda_id === d.id).length;
+          {demandasSafe.length === 0 && <div className="text-center text-muted-foreground py-6">Nenhuma demanda</div>}
+          {demandasSafe.map(d => {
+            const count = escalasSafe.filter(e => e.demanda_id === d.id).length;
             return (
               <button key={d.id} onClick={() => setSelId(d.id)} className={`w-full text-left rounded-md border p-3 hover:bg-accent ${selId === d.id ? "ring-2 ring-primary" : ""}`}>
                 <div className="flex items-center justify-between">
@@ -911,11 +1090,13 @@ function DemandasTab({ diaristas }: { diaristas: Diarista[] }) {
             <Button variant="destructive" size="sm" onClick={() => remover(selecionada.id)}><Trash2 className="h-4 w-4 mr-1" />Excluir</Button>
           </CardHeader>
           <CardContent className="space-y-4">
-            <BulkEscalarDemanda
-              demanda={selecionada}
-              diaristas={diaristas}
-              onDone={load}
-            />
+            <TabErrorBoundary tabKey={`bulk-${selecionada.id}`} title="Escala em lote">
+              <BulkEscalarDemanda
+                demanda={selecionada}
+                diaristas={diaristasSafe}
+                onDone={load}
+              />
+            </TabErrorBoundary>
             <div className="rounded-lg border overflow-hidden">
               <Table>
                 <TableHeader>
@@ -929,9 +1110,9 @@ function DemandasTab({ diaristas }: { diaristas: Diarista[] }) {
                   {escalasDaDemanda.length === 0 && <TableRow><TableCell colSpan={3} className="text-center text-muted-foreground py-6">Ninguém escalado ainda. Use o formulário acima ou a aba Escala.</TableCell></TableRow>}
                   {escalasDaDemanda
                     .slice()
-                    .sort((a, b) => a.data.localeCompare(b.data))
+                    .sort((a, b) => String(a.data ?? "").localeCompare(String(b.data ?? "")))
                     .map(e => {
-                      const p = diaristas.find(x => x.id === e.diarista_id);
+                      const p = diaristasSafe.find(x => x.id === e.diarista_id);
                       return (
                         <TableRow key={e.id}>
                           <TableCell>{fmtDate(e.data)} {(isDomingo(e.data) || e.eh_feriado) && <Badge variant="secondary" className="ml-1 text-[10px]">{e.eh_feriado && !isDomingo(e.data) ? "Feriado" : "Domingo"}</Badge>}</TableCell>
@@ -952,6 +1133,8 @@ function DemandasTab({ diaristas }: { diaristas: Diarista[] }) {
 
 /* ---- Bulk escalar dentro da demanda (múltiplos diaristas × múltiplos dias) ---- */
 function BulkEscalarDemanda({ demanda, diaristas, onDone }: { demanda: Demanda; diaristas: Diarista[]; onDone: () => void }) {
+  useTabRuntimeGuard("Escala em lote");
+  const diaristasSafe = Array.isArray(diaristas) ? diaristas : [];
   const [inicio, setInicio] = useState(demanda.data_inicio ?? today());
   const [fim, setFim] = useState(demanda.data_fim ?? demanda.data_inicio ?? today());
   const [modo, setModo] = useState<"todos" | "uteis" | "domingos">("todos");
@@ -962,13 +1145,14 @@ function BulkEscalarDemanda({ demanda, diaristas, onDone }: { demanda: Demanda; 
 
   const lista = useMemo(() => {
     const q = busca.trim().toLowerCase();
-    return diaristas.filter(d => !q || d.nome.toLowerCase().includes(q));
-  }, [diaristas, busca]);
+    return diaristasSafe.filter(d => !q || safeLower(d.nome).includes(q));
+  }, [diaristasSafe, busca]);
 
   function gerarDias(): string[] {
     if (!inicio || !fim) return [];
     const [y1, m1, d1] = inicio.split("-").map(Number);
     const [y2, m2, d2] = fim.split("-").map(Number);
+    if (![y1, m1, d1, y2, m2, d2].every(Number.isFinite)) return [];
     const start = new Date(y1, m1 - 1, d1);
     const end = new Date(y2, m2 - 1, d2);
     if (end < start) return [];
@@ -991,50 +1175,55 @@ function BulkEscalarDemanda({ demanda, diaristas, onDone }: { demanda: Demanda; 
   }
 
   async function escalarBulk() {
-    const dias = gerarDias();
-    if (dias.length === 0) return toast.error("Intervalo de datas inválido");
-    if (selecionados.size === 0) return toast.error("Selecione ao menos uma diarista");
-    const escolhidos = diaristas.filter(d => selecionados.has(d.id));
-    const bloqueados = escolhidos.filter(d => d.status === "Bloqueado");
-    const validos = escolhidos.filter(d => d.status !== "Bloqueado");
-    bloqueados.forEach(b => toast.error(`${b.nome} está bloqueado e não pode ser escalado`));
-    if (validos.length === 0) return;
+    try {
+      const dias = gerarDias();
+      if (dias.length === 0) return toast.error("Intervalo de datas inválido");
+      if (selecionados.size === 0) return toast.error("Selecione ao menos uma diarista");
+      const escolhidos = diaristasSafe.filter(d => selecionados.has(d.id));
+      const bloqueados = escolhidos.filter(d => d.status === "Bloqueado");
+      const validos = escolhidos.filter(d => d.status !== "Bloqueado");
+      bloqueados.forEach(b => toast.error(`${b.nome} bloqueado`));
+      if (validos.length === 0) return;
 
-    setEnviando(true);
-    // Buscar escalas já existentes nesse intervalo para os diaristas selecionados (evitar violação de unique)
-    const { data: jaExistem } = await supabase
-      .from("escalas")
-      .select("diarista_id, data")
-      .in("diarista_id", validos.map(v => v.id))
-      .in("data", dias);
-    const existentes = new Set((jaExistem ?? []).map(x => `${x.diarista_id}|${x.data}`));
+      setEnviando(true);
+      // Buscar escalas já existentes nesse intervalo para os diaristas selecionados (evitar violação de unique)
+      const { data: jaExistem, error: existentesError } = await supabase
+        .from("escalas")
+        .select("diarista_id, data")
+        .in("diarista_id", validos.map(v => v.id))
+        .in("data", dias);
+      if (existentesError) return toast.error("Não foi possível conferir escalas existentes", { description: existentesError.message });
+      const existentes = new Set((jaExistem ?? []).map(x => `${x.diarista_id}|${x.data}`));
 
-    const rows: Array<{ diarista_id: string; demanda_id: string; data: string; valor_diaria: number; valor_passagem: number; eh_feriado: boolean }> = [];
-    for (const dia of dias) {
-      const { valor_diaria, valor_passagem } = calcularValor(dia, ehFeriado);
-      for (const v of validos) {
-        if (existentes.has(`${v.id}|${dia}`)) continue;
-        rows.push({
-          diarista_id: v.id,
-          demanda_id: demanda.id,
-          data: dia,
-          valor_diaria, valor_passagem,
-          eh_feriado: ehFeriado && isDomingo(dia) === false ? true : ehFeriado,
-        });
+      const rows: Array<{ diarista_id: string; demanda_id: string; data: string; valor_diaria: number; valor_passagem: number; eh_feriado: boolean; observacao: string }> = [];
+      for (const dia of dias) {
+        const { valor_diaria, valor_passagem } = calcularValor(dia, ehFeriado);
+        for (const v of validos) {
+          if (existentes.has(`${v.id}|${dia}`)) continue;
+          rows.push({
+            diarista_id: v.id,
+            demanda_id: demanda.id,
+            data: dia,
+            valor_diaria, valor_passagem,
+            eh_feriado: ehFeriado && isDomingo(dia) === false ? true : ehFeriado,
+            observacao: "",
+          });
+        }
       }
-    }
 
-    if (rows.length === 0) {
+      if (rows.length === 0) return toast.error("Todos já estavam escalados nesses dias");
+      const { error } = await supabase.from("escalas").insert(rows);
+      if (error) return toast.error("Não foi possível criar escala em lote", { description: error.message });
+      const puladas = validos.length * dias.length - rows.length;
+      toast.success(`${rows.length} escala(s) criada(s)${puladas > 0 ? ` (${puladas} já existiam)` : ""}`);
+      setSelecionados(new Set());
+      onDone();
+    } catch (error) {
+      console.error(error);
+      toast.error("Não foi possível escalar em lote. Tente novamente.");
+    } finally {
       setEnviando(false);
-      return toast.error("Todos já estavam escalados nesses dias");
     }
-    const { error } = await supabase.from("escalas").insert(rows);
-    setEnviando(false);
-    if (error) return toast.error(error.message);
-    const puladas = validos.length * dias.length - rows.length;
-    toast.success(`${rows.length} escala(s) criada(s)${puladas > 0 ? ` (${puladas} já existiam)` : ""}`);
-    setSelecionados(new Set());
-    onDone();
   }
 
   const preview = gerarDias();
@@ -1046,14 +1235,11 @@ function BulkEscalarDemanda({ demanda, diaristas, onDone }: { demanda: Demanda; 
         <Field label="De" id="bd-ini"><Input id="bd-ini" type="date" value={inicio} onChange={e => setInicio(e.target.value)} /></Field>
         <Field label="Até" id="bd-fim"><Input id="bd-fim" type="date" value={fim} onChange={e => setFim(e.target.value)} /></Field>
         <Field label="Dias" id="bd-mod">
-          <Select value={modo} onValueChange={v => setModo(v as typeof modo)}>
-            <SelectTrigger id="bd-mod"><SelectValue /></SelectTrigger>
-            <SelectContent>
-              <SelectItem value="todos">Todos os dias</SelectItem>
-              <SelectItem value="uteis">Só dias úteis (seg–sex)</SelectItem>
-              <SelectItem value="domingos">Só domingos</SelectItem>
-            </SelectContent>
-          </Select>
+          <select id="bd-mod" value={modo} onChange={e => setModo(e.target.value as typeof modo)} className="flex h-9 w-full rounded-md border border-input bg-background px-3 py-1 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring">
+            <option value="todos">Todos os dias</option>
+            <option value="uteis">Só dias úteis (seg–sex)</option>
+            <option value="domingos">Só domingos</option>
+          </select>
         </Field>
         <div className="flex items-end">
           <label className="flex items-center gap-2 text-sm h-9">
@@ -1076,11 +1262,17 @@ function BulkEscalarDemanda({ demanda, diaristas, onDone }: { demanda: Demanda; 
             <label
               key={d.id}
               className={`flex items-center gap-3 px-3 py-2 text-sm hover:bg-muted/40 cursor-pointer ${bloq ? "opacity-60" : ""}`}
+              onClick={(e) => {
+                if (bloq) {
+                  e.preventDefault();
+                  toast.error(`${d.nome} bloqueado`);
+                }
+              }}
             >
               <Checkbox
                 checked={selecionados.has(d.id)}
                 onCheckedChange={() => {
-                  if (bloq) { toast.error(`${d.nome} está bloqueado e não pode ser escalado`); return; }
+                  if (bloq) { toast.error(`${d.nome} bloqueado`); return; }
                   toggle(d.id);
                 }}
                 disabled={bloq}
@@ -1114,12 +1306,17 @@ function EpiTab({ diaristas }: { diaristas: Diarista[] }) {
   const [entrega, setEntrega] = useState({ tipo: "bota" as EpiTipo, tamanho: "", diarista_id: "" });
 
   const load = useCallback(async () => {
-    const [s, e] = await Promise.all([
-      supabase.from("epi_estoque").select("*").order("tipo").order("tamanho"),
-      supabase.from("epi_entregas").select("*").order("entregue_em", { ascending: false }),
-    ]);
-    if (!s.error) setEstoque((s.data ?? []) as unknown as EpiEstoque[]);
-    if (!e.error) setEntregas((e.data ?? []) as unknown as EpiEntrega[]);
+    try {
+      const [s, e] = await Promise.all([
+        supabase.from("epi_estoque").select("*").order("tipo").order("tamanho"),
+        supabase.from("epi_entregas").select("*").order("entregue_em", { ascending: false }),
+      ]);
+      if (!s.error) setEstoque((s.data ?? []) as unknown as EpiEstoque[]);
+      if (!e.error) setEntregas((e.data ?? []) as unknown as EpiEntrega[]);
+    } catch (error) {
+      console.error(error);
+      toast.error("Falha ao carregar EPIs");
+    }
   }, []);
   useEffect(() => { load(); }, [load]);
 
@@ -1237,13 +1434,10 @@ function EpiTab({ diaristas }: { diaristas: Diarista[] }) {
         </CardHeader>
         <CardContent>
           <div className="grid gap-2 sm:grid-cols-[140px_1fr_140px_auto]">
-            <Select value={novo.tipo} onValueChange={v => setNovo({ ...novo, tipo: v as EpiTipo })}>
-              <SelectTrigger><SelectValue /></SelectTrigger>
-              <SelectContent>
-                <SelectItem value="bota">Bota</SelectItem>
-                <SelectItem value="colete">Colete</SelectItem>
-              </SelectContent>
-            </Select>
+            <select value={novo.tipo} onChange={e => setNovo({ ...novo, tipo: e.target.value as EpiTipo })} className="flex h-9 w-full rounded-md border border-input bg-background px-3 py-1 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring">
+              <option value="bota">Bota</option>
+              <option value="colete">Colete</option>
+            </select>
             <Input placeholder={novo.tipo === "bota" ? "Tamanho (ex: 42)" : "Tamanho (ex: M)"} value={novo.tamanho} onChange={e => setNovo({ ...novo, tamanho: e.target.value })} />
             <Input type="number" min={1} value={novo.quantidade} onChange={e => setNovo({ ...novo, quantidade: Number(e.target.value) || 1 })} />
             <Button onClick={addEstoque}><Plus className="h-4 w-4 mr-1" />Adicionar</Button>
@@ -1263,27 +1457,20 @@ function EpiTab({ diaristas }: { diaristas: Diarista[] }) {
         </CardHeader>
         <CardContent className="space-y-3">
           <div className="grid gap-2 sm:grid-cols-[140px_140px_1fr_auto]">
-            <Select value={entrega.tipo} onValueChange={v => setEntrega({ ...entrega, tipo: v as EpiTipo, tamanho: "" })}>
-              <SelectTrigger><SelectValue /></SelectTrigger>
-              <SelectContent>
-                <SelectItem value="bota">Bota</SelectItem>
-                <SelectItem value="colete">Colete</SelectItem>
-              </SelectContent>
-            </Select>
-            <Select value={entrega.tamanho} onValueChange={v => setEntrega({ ...entrega, tamanho: v })}>
-              <SelectTrigger><SelectValue placeholder="Tamanho" /></SelectTrigger>
-              <SelectContent>
-                {estoque.filter(e => e.tipo === entrega.tipo).map(e => (
-                  <SelectItem key={e.id} value={e.tamanho}>{e.tamanho} ({e.quantidade_total - emUso(e.tipo, e.tamanho).length} disp.)</SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-            <Select value={entrega.diarista_id} onValueChange={v => setEntrega({ ...entrega, diarista_id: v })}>
-              <SelectTrigger><SelectValue placeholder="Diarista" /></SelectTrigger>
-              <SelectContent>
-                {diaristas.map(d => <SelectItem key={d.id} value={d.id}>{d.nome}</SelectItem>)}
-              </SelectContent>
-            </Select>
+            <select value={entrega.tipo} onChange={e => setEntrega({ ...entrega, tipo: e.target.value as EpiTipo, tamanho: "" })} className="flex h-9 w-full rounded-md border border-input bg-background px-3 py-1 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring">
+              <option value="bota">Bota</option>
+              <option value="colete">Colete</option>
+            </select>
+            <select value={entrega.tamanho} onChange={e => setEntrega({ ...entrega, tamanho: e.target.value })} className="flex h-9 w-full rounded-md border border-input bg-background px-3 py-1 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring">
+              <option value="">Tamanho</option>
+              {estoque.filter(e => e.tipo === entrega.tipo).map(e => (
+                <option key={e.id} value={e.tamanho}>{e.tamanho} ({e.quantidade_total - emUso(e.tipo, e.tamanho).length} disp.)</option>
+              ))}
+            </select>
+            <select value={entrega.diarista_id} onChange={e => setEntrega({ ...entrega, diarista_id: e.target.value })} className="flex h-9 w-full rounded-md border border-input bg-background px-3 py-1 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring">
+              <option value="">Diarista</option>
+              {diaristas.map(d => <option key={d.id} value={d.id}>{d.nome}</option>)}
+            </select>
             <Button onClick={registrarEntrega}><Plus className="h-4 w-4 mr-1" />Entregar</Button>
           </div>
 
