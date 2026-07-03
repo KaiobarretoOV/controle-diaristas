@@ -1,4 +1,4 @@
-import { createFileRoute, useNavigate } from "@tanstack/react-router";
+import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
 import { Component, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { z } from "zod";
 import { supabase } from "@/integrations/supabase/client";
@@ -13,7 +13,7 @@ import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetDescription } from "
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Textarea } from "@/components/ui/textarea";
-import { Search, UserPlus, Trash2, Users, Save, CalendarDays, ClipboardList, Shirt, Plus, X, AlertTriangle } from "lucide-react";
+import { Search, UserPlus, Trash2, Users, Save, CalendarDays, ClipboardList, Shirt, Plus, X, AlertTriangle, ShieldCheck, LogOut } from "lucide-react";
 import { toast } from "sonner";
 
 const searchSchema = z.object({
@@ -216,8 +216,19 @@ function HomePage() {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [form, setForm] = useState(empty);
   const fileRef = useRef<HTMLInputElement>(null);
+  const [isAdmin, setIsAdmin] = useState(false);
 
   useEffect(() => { load(); }, []);
+  useEffect(() => {
+    supabase.rpc("my_access_status" as never).then(({ data }) => {
+      setIsAdmin(String(data ?? "") === "admin");
+    });
+  }, []);
+
+  async function logout() {
+    await supabase.auth.signOut();
+    navigate({ to: "/auth", replace: true });
+  }
 
   async function load() {
     try {
@@ -338,6 +349,12 @@ function HomePage() {
           <div className="flex-1">
             <h1 className="text-xl font-semibold tracking-tight">Gestão de Diaristas</h1>
           </div>
+          {isAdmin && (
+            <Link to="/admin">
+              <Button size="sm" variant="secondary"><ShieldCheck className="h-4 w-4 mr-1" />Admin</Button>
+            </Link>
+          )}
+          <Button size="sm" variant="outline" onClick={logout}><LogOut className="h-4 w-4 mr-1" />Sair</Button>
         </div>
       </header>
 

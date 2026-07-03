@@ -41,17 +41,6 @@ function AuthPage() {
   async function handleSignup(e: React.FormEvent) {
     e.preventDefault();
     setLoading(true);
-    const { data: allowed, error: rpcError } = await supabase.rpc("can_signup");
-    if (rpcError) {
-      setLoading(false);
-      toast.error("Erro ao verificar limite", { description: rpcError.message });
-      return;
-    }
-    if (!allowed) {
-      setLoading(false);
-      toast.error("Limite atingido", { description: "Já existem 5 usuários cadastrados." });
-      return;
-    }
     const { error } = await supabase.auth.signUp({
       email,
       password,
@@ -62,7 +51,9 @@ function AuthPage() {
       toast.error("Não foi possível cadastrar", { description: error.message });
       return;
     }
-    toast.success("Cadastro criado! Faça login.");
+    toast.success("Solicitação enviada!", {
+      description: "Seu acesso precisa ser aprovado pelo administrador antes do primeiro login.",
+    });
     setMode("login");
   }
 
@@ -110,7 +101,7 @@ function AuthPage() {
                   <Input id="pass-up" type="password" required minLength={6} value={password} onChange={(e) => setPassword(e.target.value)} />
                 </div>
                 <p className="text-xs text-muted-foreground">
-                  Máx. 5 contas: o 1º cadastro vira administrador, os demais viram líderes.
+                  Seu cadastro será enviado para aprovação do administrador antes de liberar o acesso.
                 </p>
                 <Button type="submit" className="w-full" disabled={loading}>
                   {loading ? "Cadastrando..." : "Cadastrar"}
