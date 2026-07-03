@@ -288,6 +288,36 @@ export type Database = {
           },
         ]
       }
+      signup_links: {
+        Row: {
+          created_at: string
+          created_by: string
+          expires_at: string
+          id: string
+          token: string
+          used_at: string | null
+          used_diarista_id: string | null
+        }
+        Insert: {
+          created_at?: string
+          created_by: string
+          expires_at?: string
+          id?: string
+          token?: string
+          used_at?: string | null
+          used_diarista_id?: string | null
+        }
+        Update: {
+          created_at?: string
+          created_by?: string
+          expires_at?: string
+          id?: string
+          token?: string
+          used_at?: string | null
+          used_diarista_id?: string | null
+        }
+        Relationships: []
+      }
       user_roles: {
         Row: {
           created_at: string

@@ -26,10 +26,14 @@ function fmtData(v: string): string {
   return `${d}.${m}.${y.slice(-2)}`;
 }
 
-async function fetchArrayBuffer(url: string): Promise<ArrayBuffer | null> {
+async function fetchAsBase64(url: string): Promise<string | null> {
   try {
     const r = await fetch(url);
-    return await r.arrayBuffer();
+    const buf = await r.arrayBuffer();
+    let binary = "";
+    const bytes = new Uint8Array(buf);
+    for (let i = 0; i < bytes.byteLength; i++) binary += String.fromCharCode(bytes[i]);
+    return btoa(binary);
   } catch {
     return null;
   }
@@ -56,8 +60,8 @@ export async function gerarListagemXLSX(input: ListagemInput): Promise<void> {
   ws.getColumn(7).width = 7.5;
   ws.getColumn(8).width = 76;
 
-  const logoBuf = await fetchArrayBuffer(logoAsset.url);
-  const imgId = logoBuf ? wb.addImage({ buffer: logoBuf, extension: "png" }) : null;
+  const logoB64 = await fetchAsBase64(logoAsset.url);
+  const imgId = logoB64 ? wb.addImage({ base64: logoB64, extension: "png" }) : null;
 
   const headers = ["Nº", "CPF", "NOME COMPLETO", "ENTRADA", "ASSINATURA (SEM ABREVIAÇÃO)", "SAÍDA", "ASSINATURA (SEM ABREVIAÇÃO)"];
 
