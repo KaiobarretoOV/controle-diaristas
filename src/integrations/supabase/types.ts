@@ -120,6 +120,7 @@ export type Database = {
           lider: string
           localidade: string
           nome: string
+          sexo: string | null
           status: string
           telefone: string
           turno: string
@@ -137,6 +138,7 @@ export type Database = {
           lider?: string
           localidade?: string
           nome: string
+          sexo?: string | null
           status?: string
           telefone?: string
           turno?: string
@@ -154,6 +156,7 @@ export type Database = {
           lider?: string
           localidade?: string
           nome?: string
+          sexo?: string | null
           status?: string
           telefone?: string
           turno?: string

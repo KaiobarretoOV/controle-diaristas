@@ -33,6 +33,7 @@ export const Route = createFileRoute("/_authenticated/")({
 
 type Status = "Ativo" | "Afastado" | "Bloqueado";
 type Turno = "Manhã" | "Tarde" | "Noite";
+type Sexo = "M" | "F" | "";
 type EpiTipo = "bota" | "colete";
 type MainTab = "lista" | "cadastrar" | "escala" | "demandas" | "epis";
 type DetailTab = "ficha" | "fin" | "adv";
@@ -43,7 +44,7 @@ interface Uniforme {
 }
 interface Diarista {
   id: string; nome: string; cpf: string; endereco: string; localidade: string; lider: string;
-  turno: Turno; telefone: string; email: string; status: Status; foto: string | null; uniforme: Uniforme;
+  turno: Turno; telefone: string; email: string; status: Status; sexo: Sexo; foto: string | null; uniforme: Uniforme;
 }
 interface Demanda { id: string; nome: string; data_inicio: string | null; data_fim: string | null; observacao: string; }
 interface Escala {
@@ -57,7 +58,7 @@ interface EpiEntrega { id: string; tipo: EpiTipo; tamanho: string; diarista_id: 
 const empty = {
   nome: "", cpf: "", endereco: "", localidade: "", lider: "",
   turno: "Manhã" as Turno, telefone: "", email: "",
-  status: "Ativo" as Status, foto: "", uniforme: {} as Uniforme,
+  status: "Ativo" as Status, sexo: "" as Sexo, foto: "", uniforme: {} as Uniforme,
 };
 
 function maskCPF(v: string) {
@@ -83,6 +84,9 @@ function asStatus(v: unknown): Status {
 function asTurno(v: unknown): Turno {
   return v === "Manhã" || v === "Tarde" || v === "Noite" ? v : "Manhã";
 }
+function asSexo(v: unknown): Sexo {
+  return v === "M" || v === "F" ? v : "";
+}
 function normalizeDiarista(row: Partial<Diarista> & Record<string, unknown>): Diarista {
   return {
     id: String(row.id ?? ""),
@@ -95,6 +99,7 @@ function normalizeDiarista(row: Partial<Diarista> & Record<string, unknown>): Di
     telefone: String(row.telefone ?? ""),
     email: String(row.email ?? ""),
     status: asStatus(row.status),
+    sexo: asSexo(row.sexo),
     foto: typeof row.foto === "string" && row.foto ? row.foto : null,
     uniforme: row.uniforme && typeof row.uniforme === "object" ? row.uniforme as Uniforme : {},
   };
@@ -127,6 +132,27 @@ function today() {
 function calcularValor(dateStr: string, ehFeriado: boolean) {
   const diariaAlta = isDomingo(dateStr) || ehFeriado;
   return { valor_diaria: diariaAlta ? 130 : 100, valor_passagem: 20 };
+}
+function parseISOLocal(iso: string): Date | null {
+  if (!iso || typeof iso !== "string" || !iso.includes("-")) return null;
+  const [y, m, d] = iso.split("-").map(Number);
+  if (!y || !m || !d) return null;
+  return new Date(y, m - 1, d);
+}
+function toISO(d: Date): string {
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
+// Semana: segunda→domingo. Pagamento: segunda-feira 8 dias após o fim (ex: 22/06 a 28/06 paga 06/07).
+function semanaInfo(iso: string) {
+  const d = parseISOLocal(iso);
+  if (!d) return { inicio: "", fim: "", pagamento: "", chave: "" };
+  // getDay(): 0=Dom, 1=Seg... queremos início na segunda-feira
+  const dow = d.getDay();
+  const offset = (dow + 6) % 7; // Seg=0, Ter=1,... Dom=6
+  const inicio = new Date(d); inicio.setDate(d.getDate() - offset);
+  const fim = new Date(inicio); fim.setDate(inicio.getDate() + 6); // domingo
+  const pagamento = new Date(fim); pagamento.setDate(fim.getDate() + 8); // segunda seguinte + 1 semana
+  return { inicio: toISO(inicio), fim: toISO(fim), pagamento: toISO(pagamento), chave: toISO(inicio) };
 }
 function useTabRuntimeGuard(title: string) {
   useEffect(() => {
@@ -308,10 +334,19 @@ function HomePage() {
     try {
       e.preventDefault();
       if (!form.nome.trim()) return toast.error("Nome é obrigatório");
+      if (form.sexo !== "M" && form.sexo !== "F") return toast.error("Selecione o sexo (Masculino ou Feminino)");
+      const cpfDigits = String(form.cpf || "").replace(/\D/g, "");
+      if (cpfDigits) {
+        const { data: existing } = await supabase.from("diaristas").select("id").eq("cpf", form.cpf).maybeSingle();
+        if (existing) return toast.error("Usuário já cadastrado");
+      }
       const { error } = await supabase.from("diaristas").insert({
         ...form, foto: form.foto || null, uniforme: form.uniforme as never,
-      });
-      if (error) return toast.error("Não foi possível cadastrar", { description: error.message });
+      } as never);
+      if (error) {
+        if (String(error.message || "").toLowerCase().includes("duplicate")) return toast.error("Usuário já cadastrado");
+        return toast.error("Não foi possível cadastrar", { description: error.message });
+      }
       toast.success("Diarista cadastrada");
       setForm(empty);
       if (fileRef.current) fileRef.current.value = "";
@@ -322,6 +357,7 @@ function HomePage() {
       toast.error("Não foi possível cadastrar. Tente novamente.");
     }
   }
+
 
   async function remove(id: string) {
     if (!confirm("Remover este diarista?")) return;
@@ -461,6 +497,13 @@ function HomePage() {
                   </Field>
                   <Field label="Telefone" id="tel"><Input id="tel" value={form.telefone} onChange={e => setForm({ ...form, telefone: maskTel(e.target.value) })} placeholder="(00) 00000-0000" /></Field>
                   <Field label="Email" id="email"><Input id="email" type="email" value={form.email} onChange={e => setForm({ ...form, email: e.target.value })} /></Field>
+                  <Field label="Sexo *" id="sexo">
+                    <select id="sexo" value={form.sexo} onChange={e => setForm({ ...form, sexo: e.target.value as Sexo })} required className="flex h-9 w-full rounded-md border border-input bg-background px-3 py-1 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring">
+                      <option value="">Selecione...</option>
+                      <option value="M">Masculino</option>
+                      <option value="F">Feminino</option>
+                    </select>
+                  </Field>
                   <Field label="Status" id="status">
                     <select id="status" value={form.status} onChange={e => setForm({ ...form, status: e.target.value as Status })} className="flex h-9 w-full rounded-md border border-input bg-background px-3 py-1 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring">
                       <option value="Ativo">Ativo</option>
@@ -565,11 +608,15 @@ function DetailPanel({ d, onSave, onRemove }: { d: Diarista; onSave: (p: Partial
   function setUni(patch: Uniforme) { setLocal(p => ({ ...p, uniforme: { ...p.uniforme, ...patch } })); }
 
   async function save() {
+    if (local.sexo !== "M" && local.sexo !== "F") {
+      toast.error("Selecione o sexo (Masculino ou Feminino)");
+      return;
+    }
     setSaving(true);
     await onSave({
       nome: local.nome, cpf: local.cpf, endereco: local.endereco, localidade: local.localidade,
       lider: local.lider, turno: local.turno, telefone: local.telefone, email: local.email,
-      status: local.status, uniforme: local.uniforme,
+      status: local.status, sexo: local.sexo, uniforme: local.uniforme,
     });
     setSaving(false);
     toast.success("Salvo");
@@ -659,6 +706,14 @@ function DetailPanel({ d, onSave, onRemove }: { d: Diarista; onSave: (p: Partial
               <option value="Bloqueado">Bloqueado</option>
             </select>
           </Field>
+          <Field label="Sexo *" id="d-sexo">
+            <select id="d-sexo" value={local.sexo} onChange={e => set("sexo", e.target.value as Sexo)} className={`flex h-9 w-full rounded-md border ${local.sexo ? "border-input" : "border-destructive"} bg-background px-3 py-1 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring`}>
+              <option value="">Selecione...</option>
+              <option value="M">Masculino</option>
+              <option value="F">Feminino</option>
+            </select>
+            {!local.sexo && <div className="text-xs text-destructive">Obrigatório</div>}
+          </Field>
 
           <div className="rounded-lg border p-3 space-y-3">
             <div className="font-medium">Controle de Uniforme</div>
@@ -695,41 +750,72 @@ function DetailPanel({ d, onSave, onRemove }: { d: Diarista; onSave: (p: Partial
           </div>
         </div>}
 
-        {detailTab === "fin" && <div className="mt-4 space-y-3">
-          <div className="rounded-lg border p-4 bg-primary/5">
-            <div className="text-xs text-muted-foreground uppercase">Total a receber</div>
-            <div className="text-2xl font-bold">{fmtBRL(totalReceber)}</div>
-            <div className="text-xs text-muted-foreground mt-1">{escalas.length} {escalas.length === 1 ? "dia trabalhado" : "dias trabalhados"}</div>
-          </div>
-          <div className="rounded-lg border overflow-hidden">
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>Data</TableHead>
-                  <TableHead>Diária</TableHead>
-                  <TableHead>Passag.</TableHead>
-                  <TableHead className="text-right">Total</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {escalas.length === 0 && (
-                  <TableRow><TableCell colSpan={4} className="text-center text-muted-foreground py-6">Nenhum dia escalado</TableCell></TableRow>
-                )}
-                {escalas.map(e => (
-                  <TableRow key={e.id}>
-                    <TableCell>
-                      {fmtDate(e.data)}
-                      {(isDomingo(e.data) || e.eh_feriado) && <Badge variant="secondary" className="ml-1 text-[10px]">{e.eh_feriado && !isDomingo(e.data) ? "Feriado" : "Domingo"}</Badge>}
-                    </TableCell>
-                    <TableCell>{fmtBRL(Number(e.valor_diaria))}</TableCell>
-                    <TableCell>{fmtBRL(Number(e.valor_passagem))}</TableCell>
-                    <TableCell className="text-right font-medium">{fmtBRL(Number(e.valor_diaria) + Number(e.valor_passagem))}</TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
-          </div>
-        </div>}
+        {detailTab === "fin" && (() => {
+          // Agrupar por semana (Dom-Sáb)
+          type Grupo = { chave: string; inicio: string; fim: string; pagamento: string; itens: Escala[]; total: number };
+          const mapa = new Map<string, Grupo>();
+          for (const e of escalas) {
+            const info = semanaInfo(e.data);
+            if (!info.chave) continue;
+            let g = mapa.get(info.chave);
+            if (!g) {
+              g = { chave: info.chave, inicio: info.inicio, fim: info.fim, pagamento: info.pagamento, itens: [], total: 0 };
+              mapa.set(info.chave, g);
+            }
+            g.itens.push(e);
+            g.total += Number(e.valor_diaria) + Number(e.valor_passagem);
+          }
+          const grupos = Array.from(mapa.values()).sort((a, b) => b.chave.localeCompare(a.chave));
+          return (
+            <div className="mt-4 space-y-3">
+              <div className="rounded-lg border p-4 bg-primary/5">
+                <div className="text-xs text-muted-foreground uppercase">Total a receber</div>
+                <div className="text-2xl font-bold">{fmtBRL(totalReceber)}</div>
+                <div className="text-xs text-muted-foreground mt-1">
+                  {escalas.length} {escalas.length === 1 ? "dia trabalhado" : "dias trabalhados"} · {grupos.length} semana{grupos.length === 1 ? "" : "s"}
+                </div>
+              </div>
+              {grupos.length === 0 && (
+                <div className="rounded-lg border p-6 text-center text-muted-foreground text-sm">Nenhum dia escalado</div>
+              )}
+              {grupos.map(g => (
+                <div key={g.chave} className="rounded-lg border overflow-hidden">
+                  <div className="flex flex-wrap items-center justify-between gap-2 bg-muted/60 px-3 py-2 border-b">
+                    <div className="text-sm font-medium">Semana {fmtDate(g.inicio)} – {fmtDate(g.fim)}</div>
+                    <div className="flex items-center gap-2 text-xs">
+                      <Badge variant="outline">{g.itens.length} dia(s)</Badge>
+                      <Badge className="bg-emerald-600 hover:bg-emerald-600 text-white">Pagar em {fmtDate(g.pagamento)}</Badge>
+                      <span className="font-semibold">{fmtBRL(g.total)}</span>
+                    </div>
+                  </div>
+                  <Table>
+                    <TableHeader>
+                      <TableRow>
+                        <TableHead>Data</TableHead>
+                        <TableHead>Diária</TableHead>
+                        <TableHead>Passag.</TableHead>
+                        <TableHead className="text-right">Total</TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {g.itens.map(e => (
+                        <TableRow key={e.id}>
+                          <TableCell>
+                            {fmtDate(e.data)}
+                            {(isDomingo(e.data) || e.eh_feriado) && <Badge variant="secondary" className="ml-1 text-[10px]">{e.eh_feriado && !isDomingo(e.data) ? "Feriado" : "Domingo"}</Badge>}
+                          </TableCell>
+                          <TableCell>{fmtBRL(Number(e.valor_diaria))}</TableCell>
+                          <TableCell>{fmtBRL(Number(e.valor_passagem))}</TableCell>
+                          <TableCell className="text-right font-medium">{fmtBRL(Number(e.valor_diaria) + Number(e.valor_passagem))}</TableCell>
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </Table>
+                </div>
+              ))}
+            </div>
+          );
+        })()}
 
         {detailTab === "adv" && <div className="mt-4 space-y-3">
           <div className="rounded-lg border p-3 space-y-2">
@@ -771,6 +857,8 @@ function EscalaTab({ diaristas }: { diaristas: Diarista[] }) {
   const [buscaDiarista, setBuscaDiarista] = useState("");
   const [loading, setLoading] = useState(false);
 
+  const [demandaEscaladosIds, setDemandaEscaladosIds] = useState<Set<string>>(new Set());
+
   const load = useCallback(async () => {
     try {
       setLoading(true);
@@ -792,6 +880,17 @@ function EscalaTab({ diaristas }: { diaristas: Diarista[] }) {
 
   useEffect(() => { load(); setSelecionados(new Set()); }, [load]);
 
+  useEffect(() => {
+    let cancel = false;
+    (async () => {
+      if (demandaId === "nenhuma") { setDemandaEscaladosIds(new Set()); return; }
+      const { data: rows } = await supabase.from("escalas").select("diarista_id").eq("demanda_id", demandaId);
+      if (cancel) return;
+      setDemandaEscaladosIds(new Set((rows ?? []).map(r => String(r.diarista_id))));
+    })();
+    return () => { cancel = true; };
+  }, [demandaId, escalas]);
+
   const escalasSafe = Array.isArray(escalas) ? escalas : [];
   const demandasSafe = Array.isArray(demandas) ? demandas : [];
   const escaladosMap = useMemo(() => new Map(escalasSafe.map(e => [e.diarista_id, e])), [escalasSafe]);
@@ -799,8 +898,10 @@ function EscalaTab({ diaristas }: { diaristas: Diarista[] }) {
     const q = buscaDiarista.trim().toLowerCase();
     return diaristasSafe
       .filter(d => !escaladosMap.has(d.id))
+      .filter(d => !demandaEscaladosIds.has(d.id))
       .filter(d => !q || safeLower(d.nome).includes(q));
-  }, [diaristasSafe, escaladosMap, buscaDiarista]);
+  }, [diaristasSafe, escaladosMap, demandaEscaladosIds, buscaDiarista]);
+
 
   function toggle(id: string) {
     setSelecionados(prev => {
@@ -947,6 +1048,21 @@ function EscalaTab({ diaristas }: { diaristas: Diarista[] }) {
             )}
           </div>
 
+          {selecionados.size > 0 && (() => {
+            const sel = diaristasSafe.filter(d => selecionados.has(d.id));
+            const m = sel.filter(d => d.sexo === "M").length;
+            const f = sel.filter(d => d.sexo === "F").length;
+            const semSexo = sel.length - m - f;
+            return (
+              <div className="flex flex-wrap gap-2 text-xs">
+                <Badge variant="outline" className="gap-1">Total: {sel.length}</Badge>
+                <Badge className="bg-blue-500 hover:bg-blue-500 text-white gap-1">♂ {m} homem{m === 1 ? "" : "s"}</Badge>
+                <Badge className="bg-pink-500 hover:bg-pink-500 text-white gap-1">♀ {f} mulher{f === 1 ? "" : "es"}</Badge>
+                {semSexo > 0 && <Badge variant="destructive">{semSexo} sem sexo</Badge>}
+              </div>
+            );
+          })()}
+
           <Button onClick={escalarSelecionados} disabled={selecionados.size === 0} className="w-full">
             <Plus className="h-4 w-4 mr-1" />Escalar selecionados ({selecionados.size})
           </Button>
@@ -984,6 +1100,17 @@ function EscalaTab({ diaristas }: { diaristas: Diarista[] }) {
             </TableBody>
           </Table>
         </div>
+        {escalasSafe.length > 0 && (() => {
+          const escalados = escalasSafe.map(e => diaristasSafe.find(d => d.id === e.diarista_id)).filter(Boolean) as Diarista[];
+          const m = escalados.filter(d => d.sexo === "M").length;
+          const f = escalados.filter(d => d.sexo === "F").length;
+          return (
+            <div className="flex flex-wrap gap-2 text-xs justify-end">
+              <Badge className="bg-blue-500 hover:bg-blue-500 text-white">♂ {m} escalado{m === 1 ? "" : "s"}</Badge>
+              <Badge className="bg-pink-500 hover:bg-pink-500 text-white">♀ {f} escalada{f === 1 ? "" : "s"}</Badge>
+            </div>
+          );
+        })()}
         <div className="text-xs text-muted-foreground text-right">{escalasSafe.length} pessoa(s) nesse dia</div>
       </CardContent>
     </Card>
@@ -1079,7 +1206,7 @@ function DemandasTab({ diaristas }: { diaristas: Diarista[] }) {
         <CardContent className="space-y-2">
           {demandasSafe.length === 0 && <div className="text-center text-muted-foreground py-6">Nenhuma demanda</div>}
           {demandasSafe.map(d => {
-            const count = escalasSafe.filter(e => e.demanda_id === d.id).length;
+            const count = new Set(escalasSafe.filter(e => e.demanda_id === d.id).map(e => e.diarista_id)).size;
             return (
               <button key={d.id} onClick={() => setSelId(d.id)} className={`w-full text-left rounded-md border p-3 hover:bg-accent ${selId === d.id ? "ring-2 ring-primary" : ""}`}>
                 <div className="flex items-center justify-between">
@@ -1089,11 +1216,12 @@ function DemandasTab({ diaristas }: { diaristas: Diarista[] }) {
                       {d.data_inicio ? fmtDate(d.data_inicio) : "—"} → {d.data_fim ? fmtDate(d.data_fim) : "—"}
                     </div>
                   </div>
-                  <Badge variant="secondary">{count} dias</Badge>
+                  <Badge variant="secondary">{count} {count === 1 ? "diarista" : "diaristas"}</Badge>
                 </div>
               </button>
             );
           })}
+
         </CardContent>
       </Card>
 
@@ -1107,6 +1235,9 @@ function DemandasTab({ diaristas }: { diaristas: Diarista[] }) {
             <Button variant="destructive" size="sm" onClick={() => remover(selecionada.id)}><Trash2 className="h-4 w-4 mr-1" />Excluir</Button>
           </CardHeader>
           <CardContent className="space-y-4">
+            <TabErrorBoundary tabKey={`pdf-${selecionada.id}`} title="Gerar listagem">
+              <GerarListagemDemanda demanda={selecionada} escalas={escalasDaDemanda} diaristas={diaristasSafe} />
+            </TabErrorBoundary>
             <TabErrorBoundary tabKey={`bulk-${selecionada.id}`} title="Escala em lote">
               <BulkEscalarDemanda
                 demanda={selecionada}
@@ -1114,6 +1245,7 @@ function DemandasTab({ diaristas }: { diaristas: Diarista[] }) {
                 onDone={load}
               />
             </TabErrorBoundary>
+
             <div className="rounded-lg border overflow-hidden">
               <Table>
                 <TableHeader>
@@ -1148,7 +1280,124 @@ function DemandasTab({ diaristas }: { diaristas: Diarista[] }) {
   );
 }
 
+/* ---- Gerar listagem PDF ---- */
+function GerarListagemDemanda({ demanda, escalas, diaristas }: { demanda: Demanda; escalas: Escala[]; diaristas: Diarista[] }) {
+  const [cliente, setCliente] = useState("");
+  const [endereco, setEndereco] = useState("");
+  const [cidadeUf, setCidadeUf] = useState("");
+  const [turno, setTurno] = useState("T3");
+  const [entrada, setEntrada] = useState("22:00");
+  const [saida, setSaida] = useState("08:00");
+  const [dataListagem, setDataListagem] = useState(demanda.data_inicio ?? today());
+  const [ausentes, setAusentes] = useState<Set<string>>(new Set());
+
+  const diaristasNaData = useMemo(() => {
+    const ids = new Set(escalas.filter(e => !dataListagem || e.data === dataListagem).map(e => e.diarista_id));
+    return diaristas.filter(d => ids.has(d.id)).sort((a, b) => a.nome.localeCompare(b.nome));
+  }, [escalas, diaristas, dataListagem]);
+
+  const presentes = useMemo(
+    () => diaristasNaData.filter(d => !ausentes.has(d.id)),
+    [diaristasNaData, ausentes]
+  );
+
+  function toggleAusente(id: string) {
+    setAusentes(prev => {
+      const n = new Set(prev);
+      if (n.has(id)) n.delete(id); else n.add(id);
+      return n;
+    });
+  }
+
+  async function gerar() {
+    if (presentes.length === 0) return toast.error("Nenhum diarista presente para gerar a listagem");
+    try {
+      const { gerarListagemPDF } = await import("@/lib/pdf-listagem");
+      await gerarListagemPDF({
+        cliente, endereco, cidadeUf, turno, entrada, saida,
+        data: dataListagem,
+        diaristas: presentes.map(d => ({ cpf: d.cpf, nome: d.nome })),
+      });
+      toast.success("Listagem PDF gerada");
+    } catch (err) {
+      console.error("[gerarListagemPDF] falhou:", err);
+      toast.error("Erro ao gerar PDF: " + (err instanceof Error ? err.message : String(err)));
+    }
+  }
+
+  async function gerarExcel() {
+    if (presentes.length === 0) return toast.error("Nenhum diarista presente para gerar a listagem");
+    try {
+      const { gerarListagemXLSX } = await import("@/lib/xlsx-listagem");
+      await gerarListagemXLSX({
+        cliente, endereco, cidadeUf, turno, entrada, saida,
+        data: dataListagem,
+        diaristas: presentes.map(d => ({ cpf: d.cpf, nome: d.nome })),
+      });
+      toast.success("Planilha Excel gerada");
+    } catch (err) {
+      console.error("[gerarListagemXLSX] falhou:", err);
+      toast.error("Erro ao gerar Excel: " + (err instanceof Error ? err.message : String(err)));
+    }
+  }
+
+  return (
+    <div className="rounded-lg border p-3 space-y-3 bg-muted/30">
+      <div className="text-sm font-medium">Gerar listagem (modelo de controle)</div>
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-2">
+        <Field label="Cliente" id="pdf-cli"><Input id="pdf-cli" value={cliente} onChange={e => setCliente(e.target.value)} placeholder="J&T EXPRESS" /></Field>
+        <Field label="Endereço" id="pdf-end"><Input id="pdf-end" value={endereco} onChange={e => setEndereco(e.target.value)} /></Field>
+        <Field label="Cidade/UF" id="pdf-uf"><Input id="pdf-uf" value={cidadeUf} onChange={e => setCidadeUf(e.target.value)} /></Field>
+        <Field label="Data" id="pdf-data"><Input id="pdf-data" type="date" value={dataListagem} onChange={e => { setDataListagem(e.target.value); setAusentes(new Set()); }} /></Field>
+        <Field label="Turno" id="pdf-turno"><Input id="pdf-turno" value={turno} onChange={e => setTurno(e.target.value)} /></Field>
+        <div className="grid grid-cols-2 gap-2">
+          <Field label="Entrada" id="pdf-ent"><Input id="pdf-ent" value={entrada} onChange={e => setEntrada(e.target.value)} /></Field>
+          <Field label="Saída" id="pdf-sai"><Input id="pdf-sai" value={saida} onChange={e => setSaida(e.target.value)} /></Field>
+        </div>
+      </div>
+
+      {diaristasNaData.length > 0 && (
+        <div className="rounded-md border bg-background">
+          <div className="flex items-center justify-between px-3 py-2 border-b">
+            <div className="text-xs font-medium">Marque quem NÃO compareceu (será excluído da listagem)</div>
+            <button
+              type="button"
+              className="text-xs text-muted-foreground hover:text-foreground underline"
+              onClick={() => setAusentes(new Set())}
+            >Limpar</button>
+          </div>
+          <div className="max-h-56 overflow-auto divide-y">
+            {diaristasNaData.map(d => {
+              const ausente = ausentes.has(d.id);
+              return (
+                <label key={d.id} className={`flex items-center gap-2 px-3 py-1.5 text-sm cursor-pointer hover:bg-muted/50 ${ausente ? "opacity-60 line-through" : ""}`}>
+                  <Checkbox checked={ausente} onCheckedChange={() => toggleAusente(d.id)} />
+                  <span className="flex-1 truncate">{d.nome}</span>
+                  <span className="text-xs text-muted-foreground">{d.cpf}</span>
+                </label>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      <div className="flex items-center justify-between gap-2 flex-wrap">
+        <div className="text-xs text-muted-foreground">
+          {presentes.length} presente(s){ausentes.size > 0 ? ` · ${ausentes.size} ausente(s)` : ""} de {diaristasNaData.length}
+        </div>
+        <div className="flex gap-2">
+          <Button onClick={gerarExcel} size="sm" variant="secondary" disabled={presentes.length === 0}>Gerar Excel (.xlsx)</Button>
+          <Button onClick={gerar} size="sm" disabled={presentes.length === 0}>Gerar PDF</Button>
+        </div>
+      </div>
+
+    </div>
+  );
+}
+
+
 /* ---- Bulk escalar dentro da demanda (múltiplos diaristas × múltiplos dias) ---- */
+
 function BulkEscalarDemanda({ demanda, diaristas, onDone }: { demanda: Demanda; diaristas: Diarista[]; onDone: () => void }) {
   useTabRuntimeGuard("Escala em lote");
   const diaristasSafe = Array.isArray(diaristas) ? diaristas : [];
