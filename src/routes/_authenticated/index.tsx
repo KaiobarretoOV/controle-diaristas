@@ -483,7 +483,7 @@ function HomePage() {
                       <Input id="foto" ref={fileRef} type="file" accept="image/*" onChange={handleFoto} className="mt-1" />
                     </div>
                   </div>
-                  <Field label="Nome" id="nome"><Input id="nome" value={form.nome} onChange={e => setForm({ ...form, nome: e.target.value })} maxLength={100} required /></Field>
+                  <Field label="Nome" id="nome"><Input id="nome" value={form.nome} onChange={e => setForm({ ...form, nome: e.target.value })} maxLength={100} required autoComplete="off" autoCorrect="off" autoCapitalize="words" spellCheck={false} /></Field>
                   <Field label="CPF" id="cpf"><Input id="cpf" value={form.cpf} onChange={e => setForm({ ...form, cpf: maskCPF(e.target.value) })} placeholder="000.000.000-00" /></Field>
                   <Field label="Endereço" id="end" className="sm:col-span-2"><Textarea id="end" value={form.endereco} onChange={e => setForm({ ...form, endereco: e.target.value })} rows={2} /></Field>
                   <Field label="SC / Localidade" id="loc"><Input id="loc" value={form.localidade} onChange={e => setForm({ ...form, localidade: e.target.value })} /></Field>
@@ -685,7 +685,7 @@ function DetailPanel({ d, onSave, onRemove }: { d: Diarista; onSave: (p: Partial
         </div>
 
         {detailTab === "ficha" && <div className="space-y-4 mt-4">
-          <Field label="Nome" id="d-nome"><Input id="d-nome" value={local.nome} onChange={e => set("nome", e.target.value)} /></Field>
+          <Field label="Nome" id="d-nome"><Input id="d-nome" value={local.nome} onChange={e => set("nome", e.target.value)} autoComplete="off" autoCorrect="off" autoCapitalize="words" spellCheck={false} /></Field>
           <Field label="Endereço" id="d-end"><Textarea id="d-end" value={local.endereco} onChange={e => set("endereco", e.target.value)} rows={2} /></Field>
           <Field label="CPF" id="d-cpf"><Input id="d-cpf" value={local.cpf} onChange={e => set("cpf", maskCPF(e.target.value))} /></Field>
           <Field label="SC / Localidade" id="d-loc"><Input id="d-loc" value={local.localidade} onChange={e => set("localidade", e.target.value)} /></Field>
@@ -1082,7 +1082,14 @@ function EscalaTab({ diaristas }: { diaristas: Diarista[] }) {
             <TableBody>
               {loading && <TableRow><TableCell colSpan={5} className="text-center py-6 text-muted-foreground">Carregando...</TableCell></TableRow>}
               {!loading && escalasSafe.length === 0 && <TableRow><TableCell colSpan={5} className="text-center py-6 text-muted-foreground">Ninguém escalado nesse dia</TableCell></TableRow>}
-              {escalasSafe.map((e, i) => {
+              {escalasSafe
+                .slice()
+                .sort((a, b) => {
+                  const na = diaristasSafe.find(x => x.id === a.diarista_id)?.nome ?? "";
+                  const nb = diaristasSafe.find(x => x.id === b.diarista_id)?.nome ?? "";
+                  return na.localeCompare(nb, "pt-BR", { sensitivity: "base" });
+                })
+                .map((e, i) => {
                 const p = diaristasSafe.find(x => x.id === e.diarista_id);
                 const dem = demandasSafe.find(x => x.id === e.demanda_id);
                 return (
@@ -1259,7 +1266,11 @@ function DemandasTab({ diaristas }: { diaristas: Diarista[] }) {
                   {escalasDaDemanda.length === 0 && <TableRow><TableCell colSpan={3} className="text-center text-muted-foreground py-6">Ninguém escalado ainda. Use o formulário acima ou a aba Escala.</TableCell></TableRow>}
                   {escalasDaDemanda
                     .slice()
-                    .sort((a, b) => String(a.data ?? "").localeCompare(String(b.data ?? "")))
+                    .sort((a, b) => {
+                      const na = diaristasSafe.find(x => x.id === a.diarista_id)?.nome ?? "";
+                      const nb = diaristasSafe.find(x => x.id === b.diarista_id)?.nome ?? "";
+                      return na.localeCompare(nb, "pt-BR", { sensitivity: "base" });
+                    })
                     .map(e => {
                       const p = diaristasSafe.find(x => x.id === e.diarista_id);
                       return (
@@ -1288,12 +1299,12 @@ function GerarListagemDemanda({ demanda, escalas, diaristas }: { demanda: Demand
   const [turno, setTurno] = useState("T3");
   const [entrada, setEntrada] = useState("22:00");
   const [saida, setSaida] = useState("08:00");
-  const [dataListagem, setDataListagem] = useState(demanda.data_inicio ?? today());
+  const [dataListagem, setDataListagem] = useState("");
   const [ausentes, setAusentes] = useState<Set<string>>(new Set());
 
   const diaristasNaData = useMemo(() => {
     const ids = new Set(escalas.filter(e => !dataListagem || e.data === dataListagem).map(e => e.diarista_id));
-    return diaristas.filter(d => ids.has(d.id)).sort((a, b) => a.nome.localeCompare(b.nome));
+    return diaristas.filter(d => ids.has(d.id)).sort((a, b) => a.nome.localeCompare(b.nome, "pt-BR", { sensitivity: "base" }));
   }, [escalas, diaristas, dataListagem]);
 
   const presentes = useMemo(
@@ -1348,7 +1359,7 @@ function GerarListagemDemanda({ demanda, escalas, diaristas }: { demanda: Demand
         <Field label="Cliente" id="pdf-cli"><Input id="pdf-cli" value={cliente} onChange={e => setCliente(e.target.value)} placeholder="J&T EXPRESS" /></Field>
         <Field label="Endereço" id="pdf-end"><Input id="pdf-end" value={endereco} onChange={e => setEndereco(e.target.value)} /></Field>
         <Field label="Cidade/UF" id="pdf-uf"><Input id="pdf-uf" value={cidadeUf} onChange={e => setCidadeUf(e.target.value)} /></Field>
-        <Field label="Data" id="pdf-data"><Input id="pdf-data" type="date" value={dataListagem} onChange={e => { setDataListagem(e.target.value); setAusentes(new Set()); }} /></Field>
+        <Field label="Data (vazio = todos os dias da demanda)" id="pdf-data"><Input id="pdf-data" type="date" value={dataListagem} onChange={e => { setDataListagem(e.target.value); setAusentes(new Set()); }} /></Field>
         <Field label="Turno" id="pdf-turno"><Input id="pdf-turno" value={turno} onChange={e => setTurno(e.target.value)} /></Field>
         <div className="grid grid-cols-2 gap-2">
           <Field label="Entrada" id="pdf-ent"><Input id="pdf-ent" value={entrada} onChange={e => setEntrada(e.target.value)} /></Field>
@@ -1753,7 +1764,14 @@ function EpiTab({ diaristas }: { diaristas: Diarista[] }) {
               </TableHeader>
               <TableBody>
                 {ativas.length === 0 && <TableRow><TableCell colSpan={5} className="text-center text-muted-foreground py-6">Nenhum item em uso</TableCell></TableRow>}
-                {ativas.map(e => {
+                {ativas
+                  .slice()
+                  .sort((a, b) => {
+                    const na = diaristas.find(x => x.id === a.diarista_id)?.nome ?? "";
+                    const nb = diaristas.find(x => x.id === b.diarista_id)?.nome ?? "";
+                    return na.localeCompare(nb, "pt-BR", { sensitivity: "base" });
+                  })
+                  .map(e => {
                   const p = diaristas.find(x => x.id === e.diarista_id);
                   return (
                     <TableRow key={e.id}>
