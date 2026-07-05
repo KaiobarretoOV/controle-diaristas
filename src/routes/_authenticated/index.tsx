@@ -480,7 +480,14 @@ function HomePage() {
                     </Avatar>
                     <div className="flex-1">
                       <Label htmlFor="foto">Foto</Label>
-                      <Input id="foto" ref={fileRef} type="file" accept="image/*" onChange={handleFoto} className="mt-1" />
+                      <div className="mt-1 flex flex-col gap-2 sm:flex-row">
+                        <Input id="foto" ref={fileRef} type="file" accept="image/*" onChange={handleFoto} className="flex-1" />
+                        <label className="inline-flex h-9 cursor-pointer items-center justify-center gap-1 rounded-md border border-input bg-background px-3 text-sm font-medium shadow-sm hover:bg-accent hover:text-accent-foreground">
+                          <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M14.5 4h-5L7 7H4a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2h-3l-2.5-3z"/><circle cx="12" cy="13" r="3"/></svg>
+                          Câmera
+                          <input type="file" accept="image/*" capture="environment" className="hidden" onChange={handleFoto} />
+                        </label>
+                      </div>
                     </div>
                   </div>
                   <Field label="Nome" id="nome"><Input id="nome" value={form.nome} onChange={e => setForm({ ...form, nome: e.target.value })} maxLength={100} required autoComplete="off" autoCorrect="off" autoCapitalize="words" spellCheck={false} /></Field>
@@ -1300,34 +1307,39 @@ function GerarListagemDemanda({ demanda, escalas, diaristas }: { demanda: Demand
   const [entrada, setEntrada] = useState("22:00");
   const [saida, setSaida] = useState("08:00");
   const [dataListagem, setDataListagem] = useState("");
-  const [ausentes, setAusentes] = useState<Set<string>>(new Set());
+  const [presentes, setPresentes] = useState<Set<string>>(new Set());
+  const [listaExpandida, setListaExpandida] = useState(false);
 
   const diaristasNaData = useMemo(() => {
     const ids = new Set(escalas.filter(e => !dataListagem || e.data === dataListagem).map(e => e.diarista_id));
     return diaristas.filter(d => ids.has(d.id)).sort((a, b) => a.nome.localeCompare(b.nome, "pt-BR", { sensitivity: "base" }));
   }, [escalas, diaristas, dataListagem]);
 
-  const presentes = useMemo(
-    () => diaristasNaData.filter(d => !ausentes.has(d.id)),
-    [diaristasNaData, ausentes]
+  const presentesList = useMemo(
+    () => diaristasNaData.filter(d => presentes.has(d.id)),
+    [diaristasNaData, presentes]
   );
 
-  function toggleAusente(id: string) {
-    setAusentes(prev => {
+  function togglePresente(id: string) {
+    setPresentes(prev => {
       const n = new Set(prev);
       if (n.has(id)) n.delete(id); else n.add(id);
       return n;
     });
   }
 
+  function marcarTodos() {
+    setPresentes(new Set(diaristasNaData.map(d => d.id)));
+  }
+
   async function gerar() {
-    if (presentes.length === 0) return toast.error("Nenhum diarista presente para gerar a listagem");
+    if (presentesList.length === 0) return toast.error("Marque pelo menos uma diarista presente");
     try {
       const { gerarListagemPDF } = await import("@/lib/pdf-listagem");
       await gerarListagemPDF({
         cliente, endereco, cidadeUf, turno, entrada, saida,
         data: dataListagem,
-        diaristas: presentes.map(d => ({ cpf: d.cpf, nome: d.nome })),
+        diaristas: presentesList.map(d => ({ cpf: d.cpf, nome: d.nome })),
       });
       toast.success("Listagem PDF gerada");
     } catch (err) {
@@ -1337,13 +1349,13 @@ function GerarListagemDemanda({ demanda, escalas, diaristas }: { demanda: Demand
   }
 
   async function gerarExcel() {
-    if (presentes.length === 0) return toast.error("Nenhum diarista presente para gerar a listagem");
+    if (presentesList.length === 0) return toast.error("Marque pelo menos uma diarista presente");
     try {
       const { gerarListagemXLSX } = await import("@/lib/xlsx-listagem");
       await gerarListagemXLSX({
         cliente, endereco, cidadeUf, turno, entrada, saida,
         data: dataListagem,
-        diaristas: presentes.map(d => ({ cpf: d.cpf, nome: d.nome })),
+        diaristas: presentesList.map(d => ({ cpf: d.cpf, nome: d.nome })),
       });
       toast.success("Planilha Excel gerada");
     } catch (err) {
@@ -1359,7 +1371,7 @@ function GerarListagemDemanda({ demanda, escalas, diaristas }: { demanda: Demand
         <Field label="Cliente" id="pdf-cli"><Input id="pdf-cli" value={cliente} onChange={e => setCliente(e.target.value)} placeholder="J&T EXPRESS" /></Field>
         <Field label="Endereço" id="pdf-end"><Input id="pdf-end" value={endereco} onChange={e => setEndereco(e.target.value)} /></Field>
         <Field label="Cidade/UF" id="pdf-uf"><Input id="pdf-uf" value={cidadeUf} onChange={e => setCidadeUf(e.target.value)} /></Field>
-        <Field label="Data (vazio = todos os dias da demanda)" id="pdf-data"><Input id="pdf-data" type="date" value={dataListagem} onChange={e => { setDataListagem(e.target.value); setAusentes(new Set()); }} /></Field>
+        <Field label="Data (vazio = todos os dias da demanda)" id="pdf-data"><Input id="pdf-data" type="date" value={dataListagem} onChange={e => { setDataListagem(e.target.value); setPresentes(new Set()); }} /></Field>
         <Field label="Turno" id="pdf-turno"><Input id="pdf-turno" value={turno} onChange={e => setTurno(e.target.value)} /></Field>
         <div className="grid grid-cols-2 gap-2">
           <Field label="Entrada" id="pdf-ent"><Input id="pdf-ent" value={entrada} onChange={e => setEntrada(e.target.value)} /></Field>
@@ -1369,42 +1381,51 @@ function GerarListagemDemanda({ demanda, escalas, diaristas }: { demanda: Demand
 
       {diaristasNaData.length > 0 && (
         <div className="rounded-md border bg-background">
-          <div className="flex items-center justify-between px-3 py-2 border-b">
-            <div className="text-xs font-medium">Marque quem NÃO compareceu (será excluído da listagem)</div>
-            <button
-              type="button"
-              className="text-xs text-muted-foreground hover:text-foreground underline"
-              onClick={() => setAusentes(new Set())}
-            >Limpar</button>
-          </div>
-          <div className="max-h-56 overflow-auto divide-y">
-            {diaristasNaData.map(d => {
-              const ausente = ausentes.has(d.id);
-              return (
-                <label key={d.id} className={`flex items-center gap-2 px-3 py-1.5 text-sm cursor-pointer hover:bg-muted/50 ${ausente ? "opacity-60 line-through" : ""}`}>
-                  <Checkbox checked={ausente} onCheckedChange={() => toggleAusente(d.id)} />
-                  <span className="flex-1 truncate">{d.nome}</span>
-                  <span className="text-xs text-muted-foreground">{d.cpf}</span>
-                </label>
-              );
-            })}
-          </div>
+          <button
+            type="button"
+            className="flex w-full items-center justify-between px-3 py-2 border-b text-left hover:bg-muted/50"
+            onClick={() => setListaExpandida(v => !v)}
+          >
+            <span className="text-xs font-medium">
+              Lista de presença — marque quem COMPARECEU ({presentesList.length}/{diaristasNaData.length})
+            </span>
+            <span className="text-xs text-muted-foreground">{listaExpandida ? "▲ Recolher" : "▼ Expandir"}</span>
+          </button>
+          <>
+            <div className="flex items-center justify-end gap-3 px-3 py-1.5 border-b bg-muted/30">
+              <button type="button" className="text-xs text-muted-foreground hover:text-foreground underline" onClick={marcarTodos}>Marcar todos</button>
+              <button type="button" className="text-xs text-muted-foreground hover:text-foreground underline" onClick={() => setPresentes(new Set())}>Limpar</button>
+            </div>
+            <div className={`divide-y ${listaExpandida ? "max-h-[600px] overflow-auto" : "max-h-56 overflow-auto"}`}>
+              {(listaExpandida ? diaristasNaData : diaristasNaData.slice(0, 10)).map(d => {
+                const presente = presentes.has(d.id);
+                return (
+                  <label key={d.id} className={`flex items-center gap-2 px-3 py-1.5 text-sm cursor-pointer hover:bg-muted/50 ${presente ? "" : "opacity-60"}`}>
+                    <Checkbox checked={presente} onCheckedChange={() => togglePresente(d.id)} />
+                    <span className="flex-1 truncate">{d.nome}</span>
+                    <span className="text-xs text-muted-foreground">{d.cpf}</span>
+                  </label>
+                );
+              })}
+            </div>
+          </>
         </div>
       )}
 
       <div className="flex items-center justify-between gap-2 flex-wrap">
         <div className="text-xs text-muted-foreground">
-          {presentes.length} presente(s){ausentes.size > 0 ? ` · ${ausentes.size} ausente(s)` : ""} de {diaristasNaData.length}
+          {presentesList.length} presente(s) de {diaristasNaData.length}
         </div>
         <div className="flex gap-2">
-          <Button onClick={gerarExcel} size="sm" variant="secondary" disabled={presentes.length === 0}>Gerar Excel (.xlsx)</Button>
-          <Button onClick={gerar} size="sm" disabled={presentes.length === 0}>Gerar PDF</Button>
+          <Button onClick={gerarExcel} size="sm" variant="secondary" disabled={presentesList.length === 0}>Gerar Excel (.xlsx)</Button>
+          <Button onClick={gerar} size="sm" disabled={presentesList.length === 0}>Gerar PDF</Button>
         </div>
       </div>
 
     </div>
   );
 }
+
 
 
 /* ---- Bulk escalar dentro da demanda (múltiplos diaristas × múltiplos dias) ---- */
@@ -1581,6 +1602,7 @@ function EpiTab({ diaristas }: { diaristas: Diarista[] }) {
   const [entregas, setEntregas] = useState<EpiEntrega[]>([]);
   const [novo, setNovo] = useState({ tipo: "bota" as EpiTipo, tamanho: "", quantidade: 1 });
   const [entrega, setEntrega] = useState({ tipo: "bota" as EpiTipo, tamanho: "", diarista_id: "" });
+  const [buscaDiarista, setBuscaDiarista] = useState("");
 
   const load = useCallback(async () => {
     try {
@@ -1646,6 +1668,7 @@ function EpiTab({ diaristas }: { diaristas: Diarista[] }) {
     });
     if (error) return toast.error(error.message);
     setEntrega({ ...entrega, tamanho: "", diarista_id: "" });
+    setBuscaDiarista("");
     load();
     toast.success("Entrega registrada");
   }
@@ -1744,10 +1767,26 @@ function EpiTab({ diaristas }: { diaristas: Diarista[] }) {
                 <option key={e.id} value={e.tamanho}>{e.tamanho} ({e.quantidade_total - emUso(e.tipo, e.tamanho).length} disp.)</option>
               ))}
             </select>
-            <select value={entrega.diarista_id} onChange={e => setEntrega({ ...entrega, diarista_id: e.target.value })} className="flex h-9 w-full rounded-md border border-input bg-background px-3 py-1 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring">
-              <option value="">Diarista</option>
-              {diaristas.map(d => <option key={d.id} value={d.id}>{d.nome}</option>)}
-            </select>
+            <div className="relative">
+              <Input
+                list="epi-diaristas-list"
+                placeholder="Buscar diarista por nome..."
+                value={buscaDiarista}
+                onChange={e => {
+                  const val = e.target.value;
+                  setBuscaDiarista(val);
+                  const match = diaristas.find(d => d.nome.toLowerCase() === val.toLowerCase());
+                  setEntrega({ ...entrega, diarista_id: match?.id ?? "" });
+                }}
+                autoComplete="off"
+              />
+              <datalist id="epi-diaristas-list">
+                {diaristas
+                  .slice()
+                  .sort((a, b) => a.nome.localeCompare(b.nome, "pt-BR", { sensitivity: "base" }))
+                  .map(d => <option key={d.id} value={d.nome}>{d.cpf}</option>)}
+              </datalist>
+            </div>
             <Button onClick={registrarEntrega}><Plus className="h-4 w-4 mr-1" />Entregar</Button>
           </div>
 
