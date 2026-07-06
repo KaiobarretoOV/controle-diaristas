@@ -623,10 +623,47 @@ function DetailPanel({ d, onSave, onRemove }: { d: Diarista; onSave: (p: Partial
     await onSave({
       nome: local.nome, cpf: local.cpf, endereco: local.endereco, localidade: local.localidade,
       lider: local.lider, turno: local.turno, telefone: local.telefone, email: local.email,
-      status: local.status, sexo: local.sexo, uniforme: local.uniforme,
+      status: local.status, sexo: local.sexo, uniforme: local.uniforme, foto: local.foto,
     });
     setSaving(false);
     toast.success("Salvo");
+  }
+
+  async function handleLocalFoto(e: React.ChangeEvent<HTMLInputElement>) {
+    try {
+      const file = e.target.files?.[0];
+      if (!file) return;
+      if (file.size > 10 * 1024 * 1024) return toast.error("Foto deve ter no máximo 10MB");
+      const dataUrl = await new Promise<string>((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(reader.result as string);
+        reader.onerror = reject;
+        reader.readAsDataURL(file);
+      });
+      const img = new Image();
+      img.onload = () => {
+        try {
+          const maxW = 1600;
+          const scale = Math.min(1, maxW / Math.max(img.width, 1));
+          const w = Math.max(1, Math.round(img.width * scale));
+          const h = Math.max(1, Math.round(img.height * scale));
+          const canvas = document.createElement("canvas");
+          canvas.width = w; canvas.height = h;
+          const ctx = canvas.getContext("2d");
+          if (!ctx) { setLocal(p => ({ ...p, foto: dataUrl })); return; }
+          ctx.drawImage(img, 0, 0, w, h);
+          setLocal(p => ({ ...p, foto: canvas.toDataURL("image/jpeg", 0.85) }));
+        } catch (error) {
+          console.error(error);
+          setLocal(p => ({ ...p, foto: dataUrl }));
+        }
+      };
+      img.onerror = () => setLocal(p => ({ ...p, foto: dataUrl }));
+      img.src = dataUrl;
+    } catch (error) {
+      console.error(error);
+      toast.error("Não foi possível carregar a foto");
+    }
   }
 
   async function addAdv() {
@@ -692,6 +729,25 @@ function DetailPanel({ d, onSave, onRemove }: { d: Diarista; onSave: (p: Partial
         </div>
 
         {detailTab === "ficha" && <div className="space-y-4 mt-4">
+          <div className="flex items-center gap-3">
+            <Avatar className="h-16 w-16">
+              <AvatarImage src={local.foto ?? undefined} alt={local.nome} />
+              <AvatarFallback>{initials(local.nome) || "?"}</AvatarFallback>
+            </Avatar>
+            <div className="flex-1 space-y-2">
+              <Label htmlFor="d-foto">Foto</Label>
+              <div className="flex gap-2">
+                <Input id="d-foto" type="file" accept="image/*" onChange={handleLocalFoto} className="flex-1" />
+                {local.foto && (
+                  <Button type="button" variant="outline" size="sm" onClick={() => setLocal(p => ({ ...p, foto: null }))}>Remover</Button>
+                )}
+              </div>
+              <label className="inline-flex items-center gap-2 text-xs text-muted-foreground cursor-pointer">
+                <input type="file" accept="image/*" capture="environment" className="hidden" onChange={handleLocalFoto} />
+                <span className="underline">Tirar foto agora</span>
+              </label>
+            </div>
+          </div>
           <Field label="Nome" id="d-nome"><Input id="d-nome" value={local.nome} onChange={e => set("nome", e.target.value)} autoComplete="off" autoCorrect="off" autoCapitalize="words" spellCheck={false} /></Field>
           <Field label="Endereço" id="d-end"><Textarea id="d-end" value={local.endereco} onChange={e => set("endereco", e.target.value)} rows={2} /></Field>
           <Field label="CPF" id="d-cpf"><Input id="d-cpf" value={local.cpf} onChange={e => set("cpf", maskCPF(e.target.value))} /></Field>
