@@ -198,6 +198,30 @@ function normalizeEscala(row: Partial<Escala> & Record<string, unknown>): Escala
   };
 }
 
+async function carregarTodasEscalasComDemanda(): Promise<Escala[]> {
+  const pageSize = 1000;
+  const todas: Escala[] = [];
+
+  for (let from = 0; ; from += pageSize) {
+    const { data, error } = await supabase
+      .from("escalas")
+      .select("*")
+      .not("demanda_id", "is", null)
+      .order("data", { ascending: true })
+      .order("id", { ascending: true })
+      .range(from, from + pageSize - 1);
+
+    if (error) throw error;
+
+    const rows = data ?? [];
+    todas.push(...(rows as Array<Partial<Escala> & Record<string, unknown>>).map(normalizeEscala));
+
+    if (rows.length < pageSize) break;
+  }
+
+  return todas;
+}
+
 class TabErrorBoundary extends Component<{ tabKey: string; title: string; children: ReactNode }, { hasError: boolean }> {
   state = { hasError: false };
 
@@ -259,9 +283,20 @@ function HomePage() {
   async function load() {
     try {
       setLoading(true);
-      const { data, error } = await supabase.from("diaristas").select("*").order("nome");
-      if (error) return toast.error(error.message);
-      setItems(((data ?? []) as Array<Partial<Diarista> & Record<string, unknown>>).map(normalizeDiarista));
+      const pageSize = 1000;
+      const todas: Diarista[] = [];
+      for (let from = 0; ; from += pageSize) {
+        const { data, error } = await supabase
+          .from("diaristas")
+          .select("*")
+          .order("nome")
+          .range(from, from + pageSize - 1);
+        if (error) { toast.error(error.message); return; }
+        const rows = data ?? [];
+        todas.push(...(rows as Array<Partial<Diarista> & Record<string, unknown>>).map(normalizeDiarista));
+        if (rows.length < pageSize) break;
+      }
+      setItems(todas);
     } catch (error) {
       toast.error("Falha ao carregar diaristas");
       console.error(error);
@@ -583,6 +618,67 @@ function Field({ label, id, className = "", children }: { label: string; id: str
   );
 }
 
+/* ============ FOTO UPLOADER (usado no diálogo da foto da ficha) ============ */
+function FotoUploader({ hasFoto, onPicked }: { hasFoto: boolean; onPicked: (dataUrl: string) => void | Promise<void> }) {
+  const inputRef = useRef<HTMLInputElement | null>(null);
+  const camRef = useRef<HTMLInputElement | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  async function handle(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    e.target.value = "";
+    if (!file) return;
+    if (file.size > 10 * 1024 * 1024) { toast.error("Foto deve ter no máximo 10MB"); return; }
+    setBusy(true);
+    try {
+      const dataUrl = await new Promise<string>((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(reader.result as string);
+        reader.onerror = reject;
+        reader.readAsDataURL(file);
+      });
+      const finalUrl = await new Promise<string>((resolve) => {
+        const img = new Image();
+        img.onload = () => {
+          try {
+            const maxW = 1600;
+            const scale = Math.min(1, maxW / Math.max(img.width, 1));
+            const w = Math.max(1, Math.round(img.width * scale));
+            const h = Math.max(1, Math.round(img.height * scale));
+            const canvas = document.createElement("canvas");
+            canvas.width = w; canvas.height = h;
+            const ctx = canvas.getContext("2d");
+            if (!ctx) return resolve(dataUrl);
+            ctx.drawImage(img, 0, 0, w, h);
+            resolve(canvas.toDataURL("image/jpeg", 0.85));
+          } catch { resolve(dataUrl); }
+        };
+        img.onerror = () => resolve(dataUrl);
+        img.src = dataUrl;
+      });
+      await onPicked(finalUrl);
+    } catch (err) {
+      console.error(err);
+      toast.error("Não foi possível atualizar a foto");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="flex flex-wrap items-center gap-2">
+      <input ref={inputRef} type="file" accept="image/*" className="hidden" onChange={handle} />
+      <input ref={camRef} type="file" accept="image/*" capture="environment" className="hidden" onChange={handle} />
+      <Button type="button" size="sm" onClick={() => inputRef.current?.click()} disabled={busy}>
+        {busy ? "Enviando..." : hasFoto ? "Trocar foto" : "Adicionar foto"}
+      </Button>
+      <Button type="button" size="sm" variant="secondary" onClick={() => camRef.current?.click()} disabled={busy}>
+        Tirar foto
+      </Button>
+    </div>
+  );
+}
+
 /* ============ DETAIL PANEL (com foto grande, advertências, financeiro) ============ */
 function DetailPanel({ d, onSave, onRemove }: { d: Diarista; onSave: (p: Partial<Diarista>) => Promise<void>; onRemove: () => void }) {
   const [local, setLocal] = useState<Diarista>(d);
@@ -623,47 +719,10 @@ function DetailPanel({ d, onSave, onRemove }: { d: Diarista; onSave: (p: Partial
     await onSave({
       nome: local.nome, cpf: local.cpf, endereco: local.endereco, localidade: local.localidade,
       lider: local.lider, turno: local.turno, telefone: local.telefone, email: local.email,
-      status: local.status, sexo: local.sexo, uniforme: local.uniforme, foto: local.foto,
+      status: local.status, sexo: local.sexo, uniforme: local.uniforme,
     });
     setSaving(false);
     toast.success("Salvo");
-  }
-
-  async function handleLocalFoto(e: React.ChangeEvent<HTMLInputElement>) {
-    try {
-      const file = e.target.files?.[0];
-      if (!file) return;
-      if (file.size > 10 * 1024 * 1024) return toast.error("Foto deve ter no máximo 10MB");
-      const dataUrl = await new Promise<string>((resolve, reject) => {
-        const reader = new FileReader();
-        reader.onload = () => resolve(reader.result as string);
-        reader.onerror = reject;
-        reader.readAsDataURL(file);
-      });
-      const img = new Image();
-      img.onload = () => {
-        try {
-          const maxW = 1600;
-          const scale = Math.min(1, maxW / Math.max(img.width, 1));
-          const w = Math.max(1, Math.round(img.width * scale));
-          const h = Math.max(1, Math.round(img.height * scale));
-          const canvas = document.createElement("canvas");
-          canvas.width = w; canvas.height = h;
-          const ctx = canvas.getContext("2d");
-          if (!ctx) { setLocal(p => ({ ...p, foto: dataUrl })); return; }
-          ctx.drawImage(img, 0, 0, w, h);
-          setLocal(p => ({ ...p, foto: canvas.toDataURL("image/jpeg", 0.85) }));
-        } catch (error) {
-          console.error(error);
-          setLocal(p => ({ ...p, foto: dataUrl }));
-        }
-      };
-      img.onerror = () => setLocal(p => ({ ...p, foto: dataUrl }));
-      img.src = dataUrl;
-    } catch (error) {
-      console.error(error);
-      toast.error("Não foi possível carregar a foto");
-    }
   }
 
   async function addAdv() {
@@ -718,6 +777,14 @@ function DetailPanel({ d, onSave, onRemove }: { d: Diarista; onSave: (p: Partial
           ) : (
             <div className="flex items-center justify-center h-64 text-muted-foreground">Sem foto cadastrada</div>
           )}
+          <FotoUploader
+            hasFoto={Boolean(local.foto)}
+            onPicked={async (dataUrl) => {
+              setLocal(p => ({ ...p, foto: dataUrl }));
+              await onSave({ foto: dataUrl });
+              toast.success(local.foto ? "Foto atualizada" : "Foto adicionada");
+            }}
+          />
         </DialogContent>
       </Dialog>
 
@@ -729,25 +796,6 @@ function DetailPanel({ d, onSave, onRemove }: { d: Diarista; onSave: (p: Partial
         </div>
 
         {detailTab === "ficha" && <div className="space-y-4 mt-4">
-          <div className="flex items-center gap-3">
-            <Avatar className="h-16 w-16">
-              <AvatarImage src={local.foto ?? undefined} alt={local.nome} />
-              <AvatarFallback>{initials(local.nome) || "?"}</AvatarFallback>
-            </Avatar>
-            <div className="flex-1 space-y-2">
-              <Label htmlFor="d-foto">Foto</Label>
-              <div className="flex gap-2">
-                <Input id="d-foto" type="file" accept="image/*" onChange={handleLocalFoto} className="flex-1" />
-                {local.foto && (
-                  <Button type="button" variant="outline" size="sm" onClick={() => setLocal(p => ({ ...p, foto: null }))}>Remover</Button>
-                )}
-              </div>
-              <label className="inline-flex items-center gap-2 text-xs text-muted-foreground cursor-pointer">
-                <input type="file" accept="image/*" capture="environment" className="hidden" onChange={handleLocalFoto} />
-                <span className="underline">Tirar foto agora</span>
-              </label>
-            </div>
-          </div>
           <Field label="Nome" id="d-nome"><Input id="d-nome" value={local.nome} onChange={e => set("nome", e.target.value)} autoComplete="off" autoCorrect="off" autoCapitalize="words" spellCheck={false} /></Field>
           <Field label="Endereço" id="d-end"><Textarea id="d-end" value={local.endereco} onChange={e => set("endereco", e.target.value)} rows={2} /></Field>
           <Field label="CPF" id="d-cpf"><Input id="d-cpf" value={local.cpf} onChange={e => set("cpf", maskCPF(e.target.value))} /></Field>
@@ -1198,14 +1246,13 @@ function DemandasTab({ diaristas }: { diaristas: Diarista[] }) {
 
   const load = useCallback(async () => {
     try {
-      const [d, e] = await Promise.all([
+      const [d, escalasComDemanda] = await Promise.all([
         supabase.from("demandas").select("*").order("created_at", { ascending: false }),
-        supabase.from("escalas").select("*").not("demanda_id", "is", null),
+        carregarTodasEscalasComDemanda(),
       ]);
       if (d.error) toast.error("Falha ao carregar demandas", { description: d.error.message });
       else setDemandas(((d.data ?? []) as Array<Partial<Demanda> & Record<string, unknown>>).map(normalizeDemanda));
-      if (e.error) toast.error("Falha ao carregar escalas", { description: e.error.message });
-      else setEscalas(((e.data ?? []) as Array<Partial<Escala> & Record<string, unknown>>).map(normalizeEscala));
+      setEscalas(escalasComDemanda);
     } catch (error) {
       console.error(error);
       toast.error("Falha ao carregar demandas");
@@ -1366,10 +1413,34 @@ function GerarListagemDemanda({ demanda, escalas, diaristas }: { demanda: Demand
   const [presentes, setPresentes] = useState<Set<string>>(new Set());
   const [listaExpandida, setListaExpandida] = useState(false);
 
+  const [orfaos, setOrfaos] = useState<Diarista[]>([]);
+
+  const idsDoDia = useMemo(
+    () => Array.from(new Set(escalas.filter(e => !dataListagem || e.data === dataListagem).map(e => e.diarista_id))),
+    [escalas, dataListagem],
+  );
+
+  useEffect(() => {
+    const conhecidos = new Set(diaristas.map(d => d.id));
+    const faltando = idsDoDia.filter(id => !conhecidos.has(id));
+    if (faltando.length === 0) { setOrfaos([]); return; }
+    let cancelado = false;
+    (async () => {
+      const { data, error } = await supabase.from("diaristas").select("*").in("id", faltando);
+      if (cancelado) return;
+      if (error) { console.error("[listagem] falha ao buscar diaristas faltando:", error); return; }
+      setOrfaos(((data ?? []) as Array<Partial<Diarista> & Record<string, unknown>>).map(normalizeDiarista));
+    })();
+    return () => { cancelado = true; };
+  }, [idsDoDia, diaristas]);
+
   const diaristasNaData = useMemo(() => {
-    const ids = new Set(escalas.filter(e => !dataListagem || e.data === dataListagem).map(e => e.diarista_id));
-    return diaristas.filter(d => ids.has(d.id)).sort((a, b) => a.nome.localeCompare(b.nome, "pt-BR", { sensitivity: "base" }));
-  }, [escalas, diaristas, dataListagem]);
+    const ids = new Set(idsDoDia);
+    const conhecidas = diaristas.filter(d => ids.has(d.id));
+    const jaTem = new Set(conhecidas.map(d => d.id));
+    const extras = orfaos.filter(d => ids.has(d.id) && !jaTem.has(d.id));
+    return [...conhecidas, ...extras].sort((a, b) => a.nome.localeCompare(b.nome, "pt-BR", { sensitivity: "base" }));
+  }, [idsDoDia, diaristas, orfaos]);
 
   const presentesList = useMemo(
     () => diaristasNaData.filter(d => presentes.has(d.id)),
@@ -1427,7 +1498,7 @@ function GerarListagemDemanda({ demanda, escalas, diaristas }: { demanda: Demand
         <Field label="Cliente" id="pdf-cli"><Input id="pdf-cli" value={cliente} onChange={e => setCliente(e.target.value)} placeholder="J&T EXPRESS" /></Field>
         <Field label="Endereço" id="pdf-end"><Input id="pdf-end" value={endereco} onChange={e => setEndereco(e.target.value)} /></Field>
         <Field label="Cidade/UF" id="pdf-uf"><Input id="pdf-uf" value={cidadeUf} onChange={e => setCidadeUf(e.target.value)} /></Field>
-        <Field label="Data (vazio = todos os dias da demanda)" id="pdf-data"><Input id="pdf-data" type="date" value={dataListagem} onChange={e => { setDataListagem(e.target.value); setPresentes(new Set()); }} /></Field>
+        <Field label="Data " id="pdf-data"><Input id="pdf-data" type="date" value={dataListagem} onChange={e => { setDataListagem(e.target.value); setPresentes(new Set()); }} /></Field>
         <Field label="Turno" id="pdf-turno"><Input id="pdf-turno" value={turno} onChange={e => setTurno(e.target.value)} /></Field>
         <div className="grid grid-cols-2 gap-2">
           <Field label="Entrada" id="pdf-ent"><Input id="pdf-ent" value={entrada} onChange={e => setEntrada(e.target.value)} /></Field>

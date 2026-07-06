@@ -294,27 +294,36 @@ export type Database = {
           created_by: string
           expires_at: string
           id: string
+          max_uses: number | null
+          revoked_at: string | null
           token: string
           used_at: string | null
           used_diarista_id: string | null
+          uses_count: number
         }
         Insert: {
           created_at?: string
           created_by: string
-          expires_at?: string
+          expires_at: string
           id?: string
+          max_uses?: number | null
+          revoked_at?: string | null
           token?: string
           used_at?: string | null
           used_diarista_id?: string | null
+          uses_count?: number
         }
         Update: {
           created_at?: string
           created_by?: string
           expires_at?: string
           id?: string
+          max_uses?: number | null
+          revoked_at?: string | null
           token?: string
           used_at?: string | null
           used_diarista_id?: string | null
+          uses_count?: number
         }
         Relationships: []
       }
@@ -368,6 +377,11 @@ export type Database = {
       }
       is_active_user: { Args: { _user_id: string }; Returns: boolean }
       my_access_status: { Args: never; Returns: string }
+      public_check_signup_link: { Args: { _token: string }; Returns: Json }
+      public_consume_signup_link: {
+        Args: { _payload: Json; _token: string }
+        Returns: Json
+      }
       revoke_access: { Args: { _user_id: string }; Returns: undefined }
     }
     Enums: {
